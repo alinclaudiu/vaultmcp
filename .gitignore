@@ -28,6 +28,11 @@ dist/
 *.egg-info/
 node_modules/
 
+# Virtual environments
+.venv/
+venv/
+.uv-cache/
+
 # Local databases (when code lands)
 *.db
 *.sqlite
