@@ -21,6 +21,12 @@ from ..shared.types import (
     AuditOutput,
     ExtDeclareTableInput,
     ExtDeclareTableOutput,
+    ExtEmbedInput,
+    ExtEmbedOutput,
+    ExtEmitEventInput,
+    ExtEmitEventOutput,
+    ExtExecInput,
+    ExtExecOutput,
     ExtListOutput,
     ExtQueryInput,
     ExtQueryOutput,
@@ -73,6 +79,9 @@ __all__ = [
     "handle_append_log",
     "handle_audit",
     "handle_ext_declare_table",
+    "handle_ext_embed",
+    "handle_ext_emit_event",
+    "handle_ext_exec",
     "handle_ext_list",
     "handle_ext_query",
     "handle_ext_register",
@@ -426,6 +435,49 @@ async def handle_ext_query(db: Database, inp: ExtQueryInput) -> ExtQueryOutput:
     )
 
 
+async def handle_ext_exec(db: Database, inp: ExtExecInput) -> ExtExecOutput:
+    ext = await db.ext_get(inp.extension)
+    if ext is None:
+        raise NotFoundError(f"Extension {inp.extension!r} not registered")
+    rows_affected = await db.ext_exec_as_role(
+        sql=inp.sql, params=inp.params, role_name=ext["role_name"]
+    )
+    return ExtExecOutput(rows_affected=rows_affected)
+
+
+async def handle_ext_embed(db: Database, inp: ExtEmbedInput) -> ExtEmbedOutput:
+    ext = await db.ext_get(inp.extension)
+    if ext is None:
+        raise NotFoundError(f"Extension {inp.extension!r} not registered")
+    rel = inp.rel_path.lstrip("/")
+    if rel.startswith("ext/"):
+        raise ValidationFailed(
+            "rel_path must NOT include the 'ext/<name>/' prefix; "
+            "it's added automatically"
+        )
+    full_path = f"ext/{inp.extension}/{rel}"
+    queued = await db.ext_enqueue_embedding(path=full_path, content=inp.content)
+    return ExtEmbedOutput(path=full_path, queued=queued)
+
+
+async def handle_ext_emit_event(
+    db: Database, inp: ExtEmitEventInput
+) -> ExtEmitEventOutput:
+    ext = await db.ext_get(inp.extension)
+    if ext is None:
+        raise NotFoundError(f"Extension {inp.extension!r} not registered")
+    namespaced = f"ext_{inp.extension}_{inp.event_type}"
+    event_id, gv = await db.ext_emit_event(
+        event_type=namespaced,
+        path=inp.path,
+        payload=inp.payload,
+        role_name=ext["role_name"],
+    )
+    return ExtEmitEventOutput(
+        id=event_id, namespaced_event_type=namespaced, global_version=gv
+    )
+
+
 async def handle_audit(db: Database, inp: AuditInput) -> AuditOutput:
     rows = await db.list_audit(
         path=inp.path,
@@ -540,6 +592,18 @@ async def call_handler_by_name(
     if name == "ext.query":
         return (
             await handle_ext_query(db, ExtQueryInput(**args))
+        ).model_dump(mode="json")
+    if name == "ext.exec":
+        return (
+            await handle_ext_exec(db, ExtExecInput(**args))
+        ).model_dump(mode="json")
+    if name == "ext.embed":
+        return (
+            await handle_ext_embed(db, ExtEmbedInput(**args))
+        ).model_dump(mode="json")
+    if name == "ext.emit_event":
+        return (
+            await handle_ext_emit_event(db, ExtEmitEventInput(**args))
         ).model_dump(mode="json")
 
     raise ToolError(f"Unknown tool: {name}", status=400)

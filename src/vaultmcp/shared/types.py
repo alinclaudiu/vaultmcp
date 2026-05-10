@@ -333,6 +333,61 @@ class ExtQueryOutput(BaseModel):
     truncated: bool
 
 
+class ExtExecInput(BaseModel):
+    """``ext.exec`` is the mutating sibling of ``ext.query``.
+
+    Same shape, but the master opens a read-write transaction so
+    INSERT / UPDATE / DELETE go through. The extension's Postgres
+    role bounds what the SQL can touch — the lexical write-keyword
+    reject from ext.query intentionally does NOT apply here.
+    """
+
+    extension: str = Field(..., min_length=1)
+    sql: str = Field(..., min_length=1)
+    params: list[Any] = Field(default_factory=list)
+
+
+class ExtExecOutput(BaseModel):
+    rows_affected: int
+
+
+class ExtEmbedInput(BaseModel):
+    """``ext.embed`` enqueues an embedding for extension content.
+
+    The path is forced into the ``ext/<name>/...`` namespace so the
+    extension can't accidentally clobber a wiki page's embedding.
+    The actual embedding is computed asynchronously by the same worker
+    that handles ``wiki.write``.
+    """
+
+    extension: str = Field(..., min_length=1)
+    rel_path: str = Field(..., min_length=1, max_length=512)
+    content: str = Field(..., min_length=1, max_length=1_048_576)
+
+
+class ExtEmbedOutput(BaseModel):
+    path: str   # the full ext/<name>/<rel_path> the worker will key on
+    queued: bool
+
+
+class ExtEmitEventInput(BaseModel):
+    """Extensions emit custom events into the wiki's event stream so the
+    dashboard's live-activity feed surfaces them alongside PageChanged
+    et al. event_type is namespaced to ``ext_<name>_<type>``.
+    """
+
+    extension: str = Field(..., min_length=1)
+    event_type: str = Field(..., min_length=1, max_length=64)
+    path: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExtEmitEventOutput(BaseModel):
+    id: int
+    namespaced_event_type: str
+    global_version: int
+
+
 # =============================================================
 # wiki.subscribe (SSE streaming)
 # =============================================================

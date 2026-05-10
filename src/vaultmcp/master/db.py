@@ -877,6 +877,119 @@ class Database:
                     f"REFERENCES, TRIGGER ON TABLE {full_table_name} TO {role_name}"
                 )
 
+    async def ext_exec_as_role(
+        self,
+        *,
+        sql: str,
+        params: list[Any],
+        role_name: str,
+    ) -> int:
+        """Run a mutation under the extension's role.
+
+        Read-write transaction; the role's GRANTs decide what can be
+        touched. Returns ``rows_affected`` parsed from the asyncpg
+        status string (e.g. ``INSERT 0 3`` → 3).
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(f"SET LOCAL ROLE {role_name}")
+                status = await conn.execute(sql, *params)
+        # status is "<COMMAND> [<oid>] <count>" for INSERT, "<CMD> <count>"
+        # otherwise. The trailing token is always the row count.
+        try:
+            return int(status.rsplit(" ", 1)[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    async def ext_emit_event(
+        self,
+        *,
+        event_type: str,
+        path: str | None,
+        payload: dict[str, Any],
+        role_name: str,
+    ) -> tuple[int, int]:
+        """Insert a row into ``events`` from inside the extension's role.
+
+        Returns ``(event_id, global_version)``. The role must have
+        INSERT on ``events`` (granted when policy.can_subscribe_events
+        is true); otherwise Postgres raises permission denied.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(f"SET LOCAL ROLE {role_name}")
+                gv = await conn.fetchval(
+                    "SELECT nextval('global_version_seq')"
+                )
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO events (event_type, path, global_version, payload)
+                    VALUES ($1, $2, $3, $4)
+                    RETURNING id
+                    """,
+                    event_type,
+                    path,
+                    gv,
+                    payload,
+                )
+        return int(row["id"]), int(gv)
+
+    async def ext_enqueue_embedding(
+        self, *, path: str, content: str
+    ) -> bool:
+        """Persist content for an extension path + enqueue an embedding job.
+
+        Reuses the ``embeddings`` table (which is keyed on ``path``
+        with an FK to ``pages.path``); to keep the FK satisfied while
+        avoiding a wiki entry for ext content, we insert a synthetic
+        ``pages`` row in the ``ext/<name>/...`` namespace with type
+        ``shared``. The worker then drains the job like any other.
+        """
+        from datetime import datetime, timezone
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Upsert a synthetic page so the FK on embeddings(path)
+                # is satisfied. last_writer_* fields are filled with
+                # the path itself for traceability.
+                gv = await conn.fetchval(
+                    "SELECT nextval('global_version_seq')"
+                )
+                existing = await conn.fetchrow(
+                    "SELECT version FROM pages WHERE path = $1", path
+                )
+                new_version = (existing["version"] + 1) if existing else 1
+                await conn.execute(
+                    """
+                    INSERT INTO pages
+                        (path, content, version, global_version, metadata, type,
+                         owners, updated, last_writer_server, last_writer_app,
+                         last_writer_session)
+                    VALUES
+                        ($1, $2, $3, $4, '{}'::jsonb, 'shared', ARRAY[]::TEXT[],
+                         $5, 'ext', 'ext', '')
+                    ON CONFLICT (path) DO UPDATE SET
+                        content = EXCLUDED.content,
+                        version = EXCLUDED.version,
+                        global_version = EXCLUDED.global_version,
+                        updated = EXCLUDED.updated
+                    """,
+                    path,
+                    content,
+                    new_version,
+                    gv,
+                    datetime.now(tz=timezone.utc),
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO embedding_jobs (path, version)
+                    VALUES ($1, $2)
+                    ON CONFLICT (path, version) DO NOTHING
+                    """,
+                    path,
+                    new_version,
+                )
+        return True
+
     async def ext_query_as_role(
         self,
         *,

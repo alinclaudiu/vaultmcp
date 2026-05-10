@@ -97,8 +97,11 @@ def grants_for_policy(role_name: str, policy: dict[str, bool]) -> list[str]:
         )
     if policy.get("can_subscribe_events"):
         # Extensions emit events alongside wiki activity (ext.emit_event).
+        # Both events.id (BIGSERIAL) and the shared global_version_seq
+        # need USAGE so ext.emit_event can stamp a global_version.
         grants.append(f"GRANT SELECT, INSERT ON events TO {role_name}")
         grants.append(f"GRANT USAGE ON SEQUENCE events_id_seq TO {role_name}")
+        grants.append(f"GRANT USAGE ON SEQUENCE global_version_seq TO {role_name}")
     return grants
 
 
