@@ -70,6 +70,48 @@ def migrate() -> None:
     asyncio.run(run())
 
 
+@cli.command(name="render-all")
+@click.option(
+    "--prefix",
+    default=None,
+    help="Only re-render pages whose path starts with this prefix.",
+)
+def render_all_cmd(prefix: str | None) -> None:
+    """Re-render every page in the DB to ``$VAULTMCP_WIKI_DIR``.
+
+    The wiki directory is a projection of the ``pages`` table; the
+    master keeps it in sync on every write. After a restore from
+    ``pg_dump`` (or after manually wiping the directory), this command
+    rebuilds the projection without any agent activity.
+    """
+    from .render import render_to_disk
+
+    async def run() -> None:
+        config = MasterConfig.from_env()
+        db = await Database.connect(config.database_url)
+        rendered = 0
+        failed = 0
+        try:
+            config.wiki_dir.mkdir(parents=True, exist_ok=True)
+            async for page in db.iter_all_pages(prefix=prefix):
+                try:
+                    render_to_disk(config.wiki_dir, page.path, page.content)
+                    rendered += 1
+                except (OSError, ValueError) as exc:
+                    failed += 1
+                    click.echo(f"  ! {page.path}: {exc}", err=True)
+        finally:
+            await db.close()
+        click.echo(
+            f"Rendered {rendered} page(s) to {config.wiki_dir}"
+            + (f"; {failed} failed" if failed else "")
+        )
+        if failed:
+            sys.exit(1)
+
+    asyncio.run(run())
+
+
 @cli.command(name="add-server")
 @click.option("--id", "server_id", required=True, help="Server identifier (must be unique).")
 @click.option(

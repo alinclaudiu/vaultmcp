@@ -144,6 +144,41 @@ class Database:
 
     # ---------- pages ----------
 
+    async def iter_all_pages(
+        self, *, prefix: str | None = None, batch: int = 200
+    ) -> "AsyncIterator[PageRow]":
+        """Stream every page row, in path order. Used by ``render-all``.
+
+        Pulls in batches of ``batch`` rows so a wiki with hundreds of
+        thousands of pages doesn't materialise the whole table in
+        memory. Caller can pass ``prefix`` to scope the walk.
+        """
+        cursor: str | None = None
+        async with self.pool.acquire() as conn:
+            while True:
+                clauses = ["TRUE"]
+                params: list[Any] = []
+                if prefix:
+                    params.append(prefix + "%")
+                    clauses.append(f"path LIKE ${len(params)}")
+                if cursor is not None:
+                    params.append(cursor)
+                    clauses.append(f"path > ${len(params)}")
+                params.append(batch)
+                rows = await conn.fetch(
+                    "SELECT * FROM pages WHERE "
+                    + " AND ".join(clauses)
+                    + f" ORDER BY path ASC LIMIT ${len(params)}",
+                    *params,
+                )
+                if not rows:
+                    return
+                for r in rows:
+                    yield PageRow.from_record(r)
+                if len(rows) < batch:
+                    return
+                cursor = rows[-1]["path"]
+
     async def get_page(self, path: str) -> PageRow | None:
         """Fetch a single page; ``None`` if it doesn't exist."""
         async with self.pool.acquire() as conn:
