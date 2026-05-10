@@ -244,13 +244,14 @@ For HTTP-mode, point any MCP HTTP client at `http://<master-ip>:8080/mcp/streama
 | Curious, just want the gist | This README, then [`docs/01-vision.md`](docs/01-vision.md) |
 | Choosing between VaultMCP and VaultMesh | [`docs/02-vs-vaultmesh.md`](docs/02-vs-vaultmesh.md) |
 | Deploying for the first time | [`deploy/README.md`](deploy/README.md) |
+| Operating day-to-day | [`docs/05-operations.md`](docs/05-operations.md) |
+| Picking up the project later (or fresh contributor) | [`docs/06-project-state.md`](docs/06-project-state.md) |
 | Setting up backups | [`deploy/BACKUP.md`](deploy/BACKUP.md) |
 | Sizing for prod | [`deploy/PERFORMANCE.md`](deploy/PERFORMANCE.md) |
 | Building an extension that uses the DB | [`docs/03-extensibility.md`](docs/03-extensibility.md) |
 | Implementing or extending the dashboard | [`docs/04-dashboard.md`](docs/04-dashboard.md) |
 | Reading the architecture | [`DESIGN.md`](DESIGN.md) |
 | Wondering about the long term | [`ROADMAP.md`](ROADMAP.md) |
-| Operating day-to-day | the project's CLAUDE.md (kept up to date for AI agents working on the repo) |
 
 ---
 

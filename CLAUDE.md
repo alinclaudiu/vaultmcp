@@ -141,6 +141,8 @@ Everything from v0.2 → v0.6.1 has shipped. Concretely:
 - [`docs/02-vs-vaultmesh.md`](docs/02-vs-vaultmesh.md) — when to pick which
 - [`docs/03-extensibility.md`](docs/03-extensibility.md) — the OB1-style extension model (shipped in v0.5/v0.6)
 - [`docs/04-dashboard.md`](docs/04-dashboard.md) — the live dashboard (shipped in v0.4)
+- [`docs/05-operations.md`](docs/05-operations.md) — operations manual: token lifecycle, agent provisioning, embeddings, extensions, ingest, releases, troubleshooting
+- [`docs/06-project-state.md`](docs/06-project-state.md) — current state snapshot: live deploy layout, module map, decisions log, bug postmortems, what's next, how to pick up later
 - [`deploy/README.md`](deploy/README.md) — production install, including the one-time superuser steps (`CREATE EXTENSION vector`, `ALTER ROLE vaultmcp WITH CREATEROLE`)
 - [`deploy/BACKUP.md`](deploy/BACKUP.md) — daily backup script + restore + reverse-proxy / TLS guidance
 - [`deploy/PERFORMANCE.md`](deploy/PERFORMANCE.md) — baseline numbers from `bench/run.py` + `bench/parallel.py`
