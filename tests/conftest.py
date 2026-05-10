@@ -67,6 +67,29 @@ async def clean_database(database_url: str) -> AsyncIterator[str]:
         for tbl in core_tables:
             await conn.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
         await conn.execute("DROP SEQUENCE IF EXISTS global_version_seq CASCADE")
+        # Per-extension Postgres roles (vaultmcp_ext_*). Role isolation
+        # provisions one of these per ext.register; if the test left
+        # any behind, drop them so the next CREATE ROLE in test setup
+        # doesn't see a stale name. DROP OWNED first to release any
+        # ACLs the role might still hold on dropped tables.
+        ext_roles = [
+            r["rolname"]
+            for r in await conn.fetch(
+                "SELECT rolname FROM pg_roles WHERE rolname LIKE 'vaultmcp_ext_%'"
+            )
+        ]
+        for role in ext_roles:
+            # Defensive GRANT: a role that survived a crashed test
+            # might pre-date the registration's own ``GRANT … TO
+            # CURRENT_USER``. Re-grant before DROP OWNED so the
+            # cleanup works regardless. Idempotent: granting an
+            # already-held role membership is a no-op.
+            try:
+                await conn.execute(f"GRANT {role} TO CURRENT_USER")
+            except Exception:
+                pass
+            await conn.execute(f"DROP OWNED BY {role}")
+            await conn.execute(f"DROP ROLE IF EXISTS {role}")
     finally:
         await conn.close()
     yield database_url

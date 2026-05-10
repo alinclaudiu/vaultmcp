@@ -167,11 +167,31 @@ CREATE INDEX IF NOT EXISTS subscriptions_server_idx ON subscriptions(server_id);
 CREATE TABLE IF NOT EXISTS extensions (
     name           TEXT PRIMARY KEY,                     -- "crm", "incident_tracker"
     schema_prefix  TEXT NOT NULL UNIQUE,                 -- "ext_crm_", "ext_incident_"
+    role_name      TEXT NOT NULL UNIQUE,                 -- "vaultmcp_ext_crm" — Postgres role
     owners         TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     policy         JSONB NOT NULL DEFAULT '{}'::jsonb,   -- {can_read_pages, can_read_audit, ...}
     schema_version INT NOT NULL DEFAULT 1,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Backfill role_name on installations that registered extensions
+-- before role isolation landed (pre-1.0 schema bumps don't ship a
+-- migration tool yet — the column adds with a deterministic default).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'extensions'
+          AND column_name = 'role_name'
+    ) THEN
+        -- Column exists; nothing to backfill on a new install.
+        NULL;
+    END IF;
+EXCEPTION WHEN undefined_table THEN
+    -- Table doesn't exist yet; CREATE TABLE above will handle it.
+    NULL;
+END$$;
 
 CREATE INDEX IF NOT EXISTS extensions_owners_idx
     ON extensions USING GIN (owners);

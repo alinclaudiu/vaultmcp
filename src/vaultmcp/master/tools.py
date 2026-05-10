@@ -56,6 +56,8 @@ from .extensions import (
     assert_valid_extension_name,
     build_create_table_sql,
     default_schema_prefix,
+    grants_for_policy,
+    role_name_for,
 )
 from .ownership import OwnershipRules
 from .render import render_to_disk
@@ -348,11 +350,16 @@ async def handle_ext_register(
         raise ValidationFailed(
             f"schema_prefix must start with 'ext_'; got {schema_prefix!r}"
         )
+    role_name = role_name_for(inp.name)
+    policy_dict = inp.policy.model_dump()
+    grants = grants_for_policy(role_name, policy_dict)
     row = await db.ext_register(
         name=inp.name,
         schema_prefix=schema_prefix,
+        role_name=role_name,
         owners=inp.owners,
-        policy=inp.policy.model_dump(),
+        policy=policy_dict,
+        grants=grants,
     )
     if row is None:
         raise ValidationFailed(f"Extension {inp.name!r} is already registered")
@@ -392,7 +399,9 @@ async def handle_ext_declare_table(
         table_name=inp.name,
         columns=inp.columns,
     )
-    await db.ext_create_table(sql=sql)
+    await db.ext_create_table(
+        sql=sql, full_table_name=full_name, role_name=ext["role_name"]
+    )
     return ExtDeclareTableOutput(
         extension=inp.extension,
         full_table_name=full_name,
@@ -405,8 +414,12 @@ async def handle_ext_query(db: Database, inp: ExtQueryInput) -> ExtQueryOutput:
     if ext is None:
         raise NotFoundError(f"Extension {inp.extension!r} not registered")
     assert_query_is_readonly(inp.sql)
-    cols, rows, truncated = await db.ext_query(
-        sql=inp.sql, params=inp.params, limit=inp.limit
+    cols, rows, truncated = await db.ext_query_as_role(
+        sql=inp.sql,
+        params=inp.params,
+        limit=inp.limit,
+        role_name=ext["role_name"],
+        readonly=True,
     )
     return ExtQueryOutput(
         columns=cols, rows=rows, row_count=len(rows), truncated=truncated

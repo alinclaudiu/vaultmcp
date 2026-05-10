@@ -1,5 +1,20 @@
 """Extension lifecycle: register, declare tables, run scoped queries.
 
+Postgres-role isolation
+-----------------------
+
+Each extension gets a dedicated NOLOGIN Postgres role
+(``vaultmcp_ext_<name>``). On register, the master grants the role the
+core-table privileges spelled out in the extension's policy
+(``can_read_pages`` → ``GRANT SELECT ON pages``, etc.) and ``USAGE`` on
+``public``. On ``ext.declare_table``, the new ``ext_<name>_*`` table is
+granted full DML to the role.
+
+``ext.query`` and ``ext.exec`` open a transaction and issue
+``SET LOCAL ROLE <role>`` before running the user's SQL — ``SET LOCAL``
+auto-resets at transaction end so even an ``asyncpg`` exception cannot
+leave the connection running as the extension role.
+
 Per ``docs/03-extensibility.md``, the master is a substrate that other
 applications can build on. Each extension owns a reserved schema prefix
 (``ext_<name>_*``) and reads from core tables according to its policy.
@@ -39,6 +54,52 @@ _IDENT_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]*$")
 # Default schema-prefix template when ``ext.register`` doesn't pass one.
 def default_schema_prefix(name: str) -> str:
     return f"ext_{name}_"
+
+
+def role_name_for(extension_name: str) -> str:
+    """Postgres role name owned by an extension. Derived from a regex-
+    validated extension name, so the result is safe to splice into DDL.
+    """
+    if not _IDENT_RE.fullmatch(extension_name):
+        raise ValidationFailed(
+            f"Extension name {extension_name!r} cannot be turned into a role name"
+        )
+    return f"vaultmcp_ext_{extension_name}"
+
+
+def grants_for_policy(role_name: str, policy: dict[str, bool]) -> list[str]:
+    """Return the GRANT statements that map a policy to Postgres ACLs.
+
+    The role always gets ``USAGE`` on ``public`` (so it can resolve
+    table names) and ``SELECT`` on ``extensions`` itself (so the
+    extension can introspect its own metadata if it wants).
+    Everything else is gated by the policy flags.
+    """
+    grants = [
+        f"GRANT USAGE ON SCHEMA public TO {role_name}",
+        f"GRANT SELECT ON extensions TO {role_name}",
+    ]
+    if policy.get("can_read_pages"):
+        grants.append(f"GRANT SELECT ON pages TO {role_name}")
+    if policy.get("can_read_audit"):
+        grants.append(f"GRANT SELECT ON audit TO {role_name}")
+    if policy.get("can_use_embeddings"):
+        # Extensions index their own content; needs DML on embeddings
+        # plus the embedding_jobs queue to enqueue work.
+        grants.append(
+            f"GRANT SELECT, INSERT, UPDATE, DELETE ON embeddings TO {role_name}"
+        )
+        grants.append(
+            f"GRANT SELECT, INSERT ON embedding_jobs TO {role_name}"
+        )
+        grants.append(
+            f"GRANT USAGE ON SEQUENCE embedding_jobs_id_seq TO {role_name}"
+        )
+    if policy.get("can_subscribe_events"):
+        # Extensions emit events alongside wiki activity (ext.emit_event).
+        grants.append(f"GRANT SELECT, INSERT ON events TO {role_name}")
+        grants.append(f"GRANT USAGE ON SEQUENCE events_id_seq TO {role_name}")
+    return grants
 
 
 # Lexical reject list for ``ext.query``. Matched as whole words,
@@ -161,10 +222,12 @@ def build_create_table_sql(
 
 
 __all__ = [
+    "ToolError",  # re-export so callers don't need a second import
     "assert_query_is_readonly",
     "assert_valid_extension_name",
     "build_create_table_sql",
     "column_spec_to_sql",
     "default_schema_prefix",
-    "ToolError",  # re-export so callers don't need a second import
+    "grants_for_policy",
+    "role_name_for",
 ]

@@ -176,6 +176,112 @@ async def test_extension_lifecycle_register_declare_query(
 
 
 @pytest.mark.asyncio
+async def test_extension_role_isolation_enforces_policy(
+    clean_database: str, tmp_path: Path
+) -> None:
+    """``can_read_audit=false`` means even a hand-crafted SELECT against
+    ``audit`` from inside ``ext.query`` fails at the DB layer. Same
+    holds for ``can_read_pages=false``."""
+    from vaultmcp.master.config import MasterConfig
+    from vaultmcp.master.db import Database
+    from vaultmcp.master.tools import call_handler_by_name
+
+    config = MasterConfig(database_url=clean_database, wiki_dir=tmp_path / "wiki")
+    config.wiki_dir.mkdir()
+    db = await Database.connect(config.database_url)
+    try:
+        await db.apply_schema(config.schema_sql_path)
+
+        # Register an extension with NO read permissions on audit, NO
+        # read on pages, only its own tables.
+        await call_handler_by_name(
+            "ext.register",
+            {"name": "minimal", "policy": {}},
+            db=db,
+            wiki_dir=config.wiki_dir,
+        )
+        await call_handler_by_name(
+            "ext.declare_table",
+            {
+                "extension": "minimal",
+                "name": "items",
+                "columns": [
+                    {"name": "id", "type": "uuid", "primary_key": True},
+                    {"name": "label", "type": "text"},
+                ],
+            },
+            db=db,
+            wiki_dir=config.wiki_dir,
+        )
+
+        # Querying its own table works.
+        out = await call_handler_by_name(
+            "ext.query",
+            {
+                "extension": "minimal",
+                "sql": "SELECT count(*) FROM ext_minimal_items",
+            },
+            db=db,
+            wiki_dir=config.wiki_dir,
+        )
+        assert out["row_count"] == 1
+
+        # Querying audit (not granted) -> Postgres permission error.
+        # The exact exception bubbles up from asyncpg; we just want
+        # something that's NOT a successful response.
+        with pytest.raises(Exception, match="permission denied"):
+            await call_handler_by_name(
+                "ext.query",
+                {
+                    "extension": "minimal",
+                    "sql": "SELECT count(*) FROM audit",
+                },
+                db=db,
+                wiki_dir=config.wiki_dir,
+            )
+
+        # Same for pages.
+        with pytest.raises(Exception, match="permission denied"):
+            await call_handler_by_name(
+                "ext.query",
+                {
+                    "extension": "minimal",
+                    "sql": "SELECT count(*) FROM pages",
+                },
+                db=db,
+                wiki_dir=config.wiki_dir,
+            )
+
+        # Now register a second extension with can_read_pages=true and
+        # confirm it CAN read pages but still cannot read audit.
+        await call_handler_by_name(
+            "ext.register",
+            {
+                "name": "reader",
+                "policy": {"can_read_pages": True},
+            },
+            db=db,
+            wiki_dir=config.wiki_dir,
+        )
+        out = await call_handler_by_name(
+            "ext.query",
+            {"extension": "reader", "sql": "SELECT count(*) FROM pages"},
+            db=db,
+            wiki_dir=config.wiki_dir,
+        )
+        assert out["row_count"] == 1
+        with pytest.raises(Exception, match="permission denied"):
+            await call_handler_by_name(
+                "ext.query",
+                {"extension": "reader", "sql": "SELECT count(*) FROM audit"},
+                db=db,
+                wiki_dir=config.wiki_dir,
+            )
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_extension_register_rejects_bad_prefix(
     clean_database: str, tmp_path: Path
 ) -> None:

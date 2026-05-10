@@ -768,28 +768,56 @@ class Database:
         *,
         name: str,
         schema_prefix: str,
+        role_name: str,
         owners: list[str],
         policy: dict[str, Any],
+        grants: list[str],
     ) -> dict[str, Any] | None:
-        """Insert a new extension. Returns the created row, or None if name taken."""
+        """Insert a new extension and provision its Postgres role.
+
+        All of: extensions row insert, ``CREATE ROLE``, and the policy
+        ``GRANT``s run inside one transaction so a partial failure
+        doesn't leave a half-registered extension.
+        """
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO extensions (name, schema_prefix, owners, policy)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (name) DO NOTHING
-                RETURNING name, schema_prefix, owners, policy, schema_version, created_at
-                """,
-                name,
-                schema_prefix,
-                owners,
-                policy,
-            )
-        if row is None:
-            return None
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO extensions
+                        (name, schema_prefix, role_name, owners, policy)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (name) DO NOTHING
+                    RETURNING name, schema_prefix, role_name, owners, policy,
+                              schema_version, created_at
+                    """,
+                    name,
+                    schema_prefix,
+                    role_name,
+                    owners,
+                    policy,
+                )
+                if row is None:
+                    return None
+                # CREATE ROLE inside the same transaction. NOLOGIN so
+                # nobody can connect AS the extension; only SET ROLE
+                # under master's connection grants its privileges.
+                # IF NOT EXISTS landed in PG 16; we use a portable form.
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM pg_roles WHERE rolname = $1", role_name
+                )
+                if not exists:
+                    await conn.execute(f"CREATE ROLE {role_name} NOLOGIN")
+                # Master needs membership of the new role to issue
+                # ``SET ROLE`` from ext.query / ext.exec. Granting to
+                # CURRENT_USER scopes it to whichever DB user the
+                # master is connecting as (vaultmcp in production).
+                await conn.execute(f"GRANT {role_name} TO CURRENT_USER")
+                for grant_sql in grants:
+                    await conn.execute(grant_sql)
         return {
             "name": row["name"],
             "schema_prefix": row["schema_prefix"],
+            "role_name": row["role_name"],
             "owners": list(row["owners"] or []),
             "policy": row["policy"] or {},
             "schema_version": row["schema_version"],
@@ -799,8 +827,8 @@ class Database:
     async def ext_get(self, name: str) -> dict[str, Any] | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT name, schema_prefix, owners, policy, schema_version, "
-                "created_at FROM extensions WHERE name = $1",
+                "SELECT name, schema_prefix, role_name, owners, policy, "
+                "schema_version, created_at FROM extensions WHERE name = $1",
                 name,
             )
         if row is None:
@@ -808,6 +836,7 @@ class Database:
         return {
             "name": row["name"],
             "schema_prefix": row["schema_prefix"],
+            "role_name": row["role_name"],
             "owners": list(row["owners"] or []),
             "policy": row["policy"] or {},
             "schema_version": row["schema_version"],
@@ -817,13 +846,14 @@ class Database:
     async def ext_list(self) -> list[dict[str, Any]]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT name, schema_prefix, owners, policy, schema_version, "
-                "created_at FROM extensions ORDER BY name"
+                "SELECT name, schema_prefix, role_name, owners, policy, "
+                "schema_version, created_at FROM extensions ORDER BY name"
             )
         return [
             {
                 "name": r["name"],
                 "schema_prefix": r["schema_prefix"],
+                "role_name": r["role_name"],
                 "owners": list(r["owners"] or []),
                 "policy": r["policy"] or {},
                 "schema_version": r["schema_version"],
@@ -832,29 +862,46 @@ class Database:
             for r in rows
         ]
 
-    async def ext_create_table(self, *, sql: str) -> None:
-        """Run a pre-validated CREATE TABLE produced by build_create_table_sql.
-
-        Caller is responsible for assembling the SQL via the helper —
-        this method does no extra validation, it just executes.
+    async def ext_create_table(
+        self, *, sql: str, full_table_name: str, role_name: str
+    ) -> None:
+        """Run a pre-validated CREATE TABLE and grant the extension role
+        full DML on the new table. One transaction so the GRANT can't be
+        skipped if a later step fails.
         """
         async with self.pool.acquire() as conn:
-            await conn.execute(sql)
+            async with conn.transaction():
+                await conn.execute(sql)
+                await conn.execute(
+                    f"GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, "
+                    f"REFERENCES, TRIGGER ON TABLE {full_table_name} TO {role_name}"
+                )
 
-    async def ext_query(
-        self, *, sql: str, params: list[Any], limit: int
+    async def ext_query_as_role(
+        self,
+        *,
+        sql: str,
+        params: list[Any],
+        limit: int,
+        role_name: str,
+        readonly: bool,
     ) -> tuple[list[str], list[list[Any]], bool]:
-        """Run a SELECT in a READ ONLY transaction; cap at ``limit`` rows.
+        """Run user-supplied SQL under the extension's role.
 
-        Returns ``(columns, rows, truncated)``. ``rows`` are
-        positional lists in the order of ``columns``. Postgres
-        ``READ ONLY`` rejects any DDL/DML, so even if the lexical
-        check at the tools layer is bypassed, the DB itself refuses.
+        ``SET LOCAL ROLE`` is automatically reset at transaction end
+        regardless of whether the inner query raised, so even an
+        asyncpg crash mid-query cannot leave a connection running as
+        the extension role on the next pool checkout.
+
+        For ``ext.query`` the transaction is opened READ ONLY; the role
+        grants on top mean a SELECT can only see what the policy
+        allowed. For ``ext.exec`` the transaction is read-write but
+        the role only has DML on its own ``ext_<name>_*`` tables (plus
+        whatever core grants the policy specifies).
         """
         async with self.pool.acquire() as conn:
-            async with conn.transaction(readonly=True):
-                # Pull one extra so the truncated flag is accurate when
-                # the underlying query already applies a LIMIT.
+            async with conn.transaction(readonly=readonly):
+                await conn.execute(f"SET LOCAL ROLE {role_name}")
                 rows = await conn.fetch(sql, *params)
         truncated = len(rows) > limit
         out_rows = [list(r.values()) for r in rows[:limit]]
