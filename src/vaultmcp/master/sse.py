@@ -73,8 +73,23 @@ class EventBroadcaster:
                 # so the callback is actually registered (a forgotten await
                 # silently disables the entire fanout).
                 await conn.add_listener("events_channel", self._on_notify)  # type: ignore[arg-type]
-                while not self._stopping:
-                    await asyncio.sleep(3600)
+                try:
+                    while not self._stopping:
+                        await asyncio.sleep(3600)
+                finally:
+                    # Remove the callback before the connection returns
+                    # to the pool. asyncpg emits an InterfaceWarning when
+                    # a connection with active notification listeners is
+                    # released, even when the eventual pool close would
+                    # eventually drop it. CancelledError can land here
+                    # under shutdown — keep the cleanup synchronous to
+                    # finish before re-raising.
+                    try:
+                        await conn.remove_listener(  # type: ignore[func-returns-value]
+                            "events_channel", self._on_notify
+                        )
+                    except Exception:
+                        LOG.debug("remove_listener failed during shutdown")
         except asyncio.CancelledError:
             raise
         except Exception:
