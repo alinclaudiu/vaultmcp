@@ -66,6 +66,14 @@ class MasterConfig:
     @classmethod
     def from_env(cls) -> "MasterConfig":
         """Build a config from process env. Useful for systemd EnvironmentFile."""
+        # Auto-source /srv/vaultmcp/master.env when running CLI commands
+        # (migrate, add-server, render-all, …) outside systemd. setdefault
+        # in the loader means a systemd run with EnvironmentFile= keeps
+        # priority. Permission-denied is silently ignored — the regular
+        # error below still surfaces if nothing was found.
+        from ..shared.envfile import autoload_master_env
+        autoload_master_env()
+
         database_url = os.environ.get("VAULTMCP_DATABASE_URL")
         if not database_url:
             raise RuntimeError(

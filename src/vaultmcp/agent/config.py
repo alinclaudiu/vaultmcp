@@ -36,6 +36,14 @@ class AgentConfig:
 
     @classmethod
     def from_env(cls) -> "AgentConfig":
+        # When invoked from a shell (not systemd's EnvironmentFile),
+        # try to source ``~/.config/vaultmcp/agent.env`` so commands
+        # like ``vaultmcp-agent status`` work without manual ``source``.
+        # systemd-launched runs already have env populated; setdefault
+        # in the loader keeps them as-is.
+        from ..shared.envfile import autoload_agent_env
+        autoload_agent_env()
+
         master_url = os.environ.get("VAULTMCP_MASTER_URL")
         if not master_url:
             raise RuntimeError("VAULTMCP_MASTER_URL is required")
