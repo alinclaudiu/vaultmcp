@@ -516,6 +516,7 @@ async def test_ext_deregister_drops_tables_role_and_pages(
     """Round-trip: register → declare table → embed → deregister →
     nothing left. Re-register under the same name then succeeds."""
     import asyncpg as _ap
+
     from vaultmcp.master.config import MasterConfig
     from vaultmcp.master.db import Database
     from vaultmcp.master.tools import call_handler_by_name

@@ -6,7 +6,6 @@ on-disk projection, then verifies the CLI rebuilds it from the DB.
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 from pathlib import Path
 
