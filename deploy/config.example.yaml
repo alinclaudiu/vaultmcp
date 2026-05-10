@@ -1,0 +1,28 @@
+# Example /srv/vaultmcp/config.yaml
+#
+# Copy this to /srv/vaultmcp/config.yaml (or set VAULTMCP_CONFIG_FILE
+# to a different path) and edit. Empty file -> no path-level rules
+# enforced; the per-server-app check from auth still applies.
+#
+# Supported rule expressions for v0.3:
+#
+#   producer=<app>     # only that app may write here
+#   write=human-only   # MCP rejects every write; humans edit via DB/dashboard
+#
+# `consumer=<app>` and `policy:` blocks are recognised by the parser but
+# not yet enforced — they raise an explicit error so misconfigurations
+# don't get silently ignored. They land in a follow-up.
+#
+# First match wins. List the most specific patterns first.
+
+ownership:
+  decisions/**: write=human-only
+
+  apps/webstore/**: producer=webstore
+  apps/admin/**: producer=admin
+  apps/inventory/**: producer=inventory
+  apps/pos/**: producer=pos
+
+  integrations/01-inventory--pos--*: producer=inventory
+  integrations/02-pos--inventory--*: producer=pos
+  integrations/03-webstore--admin--*: producer=webstore

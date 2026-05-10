@@ -32,6 +32,11 @@ class MasterConfig:
     # Hard cap on a single page's content size, in bytes. 1 MiB default.
     max_file_size_bytes: int = 1 * 1024 * 1024
 
+    # Optional path to the ownership/policy YAML config. None means
+    # ``/srv/vaultmcp/config.yaml`` if it exists, else no path-level
+    # rules are enforced.
+    ownership_config_path: Path | None = None
+
     # Path to the schema.sql shipped with the package; resolved at runtime.
     schema_sql_path: Path = field(
         default_factory=lambda: Path(__file__).parent / "schema.sql"
@@ -59,5 +64,10 @@ class MasterConfig:
             http_port=int(os.environ.get("VAULTMCP_HTTP_PORT", "8080")),
             max_file_size_bytes=int(
                 os.environ.get("VAULTMCP_MAX_FILE_SIZE_BYTES", str(1 * 1024 * 1024))
+            ),
+            ownership_config_path=(
+                Path(os.environ["VAULTMCP_CONFIG_FILE"]).expanduser().resolve()
+                if "VAULTMCP_CONFIG_FILE" in os.environ
+                else None
             ),
         )

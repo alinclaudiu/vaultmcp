@@ -42,6 +42,7 @@ from .errors import (
     ToolError,
     ValidationFailed,
 )
+from .ownership import OwnershipRules
 from .render import render_to_disk
 from .validation import DEFAULT_MAX_FILE_SIZE_BYTES, validate_write_content
 
@@ -116,8 +117,14 @@ async def handle_write(
     *,
     authed: AuthenticatedServer | None = None,
     max_bytes: int = DEFAULT_MAX_FILE_SIZE_BYTES,
+    ownership: OwnershipRules | None = None,
 ) -> WriteOutput:
     _enforce_session_matches_server(inp.session.server_id, inp.session.app, authed)
+
+    # Path-level ownership rules from /srv/vaultmcp/config.yaml. No-op
+    # when the file is missing or no rule matches the path.
+    if ownership is not None:
+        ownership.check_write(path=inp.path, app=inp.session.app)
 
     # Encoding / size / frontmatter / secret checks. Raises ValidationFailed
     # (422) or SizeLimitExceeded (413).
@@ -285,6 +292,7 @@ async def call_handler_by_name(
     wiki_dir: Path,
     authed: AuthenticatedServer | None = None,
     max_bytes: int = DEFAULT_MAX_FILE_SIZE_BYTES,
+    ownership: OwnershipRules | None = None,
 ) -> dict[str, Any]:
     """Dispatch a tool call by name. Returns a JSON-serializable dict.
 
@@ -300,7 +308,12 @@ async def call_handler_by_name(
     if name == "wiki.write":
         return (
             await handle_write(
-                db, wiki_dir, WriteInput(**args), authed=authed, max_bytes=max_bytes
+                db,
+                wiki_dir,
+                WriteInput(**args),
+                authed=authed,
+                max_bytes=max_bytes,
+                ownership=ownership,
             )
         ).model_dump(mode="json")
     if name == "wiki.list":

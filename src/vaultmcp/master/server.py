@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from .auth import AuthenticatedServer, hash_token, parse_bearer
 from .config import MasterConfig
 from .db import Database
+from .ownership import OwnershipRules, load_rules
 from .sse import EventBroadcaster, format_sse
 from .tools import ConflictError, ToolError, call_handler_by_name
 
@@ -71,10 +72,15 @@ def build_app(config: MasterConfig) -> FastAPI:
         broadcaster = EventBroadcaster(db)
         await broadcaster.start()
 
+        ownership = load_rules(config.ownership_config_path)
+        if len(ownership) > 0:
+            LOG.info("Loaded %d ownership rule(s)", len(ownership))
+
         state["db"] = db
         state["broadcaster"] = broadcaster
         state["wiki_dir"] = config.wiki_dir
         state["max_bytes"] = config.max_file_size_bytes
+        state["ownership"] = ownership
 
         try:
             yield
@@ -131,6 +137,7 @@ def build_app(config: MasterConfig) -> FastAPI:
         db = _get_db(state)
         wiki_dir = _get_wiki_dir(state)
         max_bytes = _get_max_bytes(state)
+        ownership = _get_ownership(state)
         try:
             return await call_handler_by_name(
                 req.tool,
@@ -139,6 +146,7 @@ def build_app(config: MasterConfig) -> FastAPI:
                 wiki_dir=wiki_dir,
                 authed=authed,
                 max_bytes=max_bytes,
+                ownership=ownership,
             )
         except ConflictError as exc:
             raise HTTPException(
@@ -210,6 +218,13 @@ def _get_max_bytes(state: dict[str, object]) -> int:
     if not isinstance(n, int):
         raise RuntimeError("max_bytes not initialized")
     return n
+
+
+def _get_ownership(state: dict[str, object]) -> OwnershipRules:
+    o = state.get("ownership")
+    if not isinstance(o, OwnershipRules):
+        raise RuntimeError("ownership not initialized")
+    return o
 
 
 def _redact(dsn: str) -> str:
