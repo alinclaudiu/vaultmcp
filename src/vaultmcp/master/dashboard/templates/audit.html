@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Audit{% endblock %}
+{% block content %}
+<section>
+  <h2 style="margin-bottom: 0.25rem">Audit log</h2>
+  <p class="muted">Most recent {{ entries|length }} entries. Filters below.</p>
+
+  <form method="get" action="/audit"
+        hx-get="/audit"
+        hx-target="closest section"
+        hx-select="section > *"
+        hx-push-url="true">
+    <fieldset class="grid">
+      <label>
+        Path
+        <input type="text" name="path" value="{{ filters.path or '' }}"
+               placeholder="apps/webstore/notes.md">
+      </label>
+      <label>
+        Server
+        <input type="text" name="server_id" value="{{ filters.server_id or '' }}"
+               placeholder="server-1">
+      </label>
+      <label>
+        App
+        <input type="text" name="app" value="{{ filters.app or '' }}"
+               placeholder="webstore">
+      </label>
+      <label>
+        Outcome
+        <select name="outcome">
+          <option value=""{% if not filters.outcome %} selected{% endif %}>any</option>
+          <option value="ok"{% if filters.outcome=='ok' %} selected{% endif %}>ok</option>
+          <option value="conflict"{% if filters.outcome=='conflict' %} selected{% endif %}>conflict</option>
+          <option value="forbidden"{% if filters.outcome=='forbidden' %} selected{% endif %}>forbidden</option>
+          <option value="validation_failed"{% if filters.outcome=='validation_failed' %} selected{% endif %}>validation_failed</option>
+        </select>
+      </label>
+    </fieldset>
+    <button type="submit">Apply filters</button>
+    <a href="/audit" role="button" class="secondary outline">Clear</a>
+  </form>
+
+  {% if entries %}
+  <table class="compact striped">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Op</th>
+        <th>Outcome</th>
+        <th>Path</th>
+        <th>Server</th>
+        <th>App</th>
+        <th>v</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td><span class="muted" title="{{ e.ts.isoformat() }}">{{ e.ts.strftime('%H:%M:%S') }}</span></td>
+        <td><span class="pill">{{ e.operation }}</span></td>
+        <td>
+          {% if e.outcome=='ok' %}<span class="pill" style="background:#e0f7e0;color:#1a4d1a">ok</span>
+          {% elif e.outcome=='conflict' %}<span class="pill" style="background:#fff3cd;color:#664d03">conflict</span>
+          {% else %}<span class="pill" style="background:#ffd6d6;color:#800">{{ e.outcome }}</span>{% endif %}
+        </td>
+        <td>{% if e.path %}<code class="path">{{ e.path }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td><code>{{ e.server_id }}</code></td>
+        <td>{{ e.app }}</td>
+        <td class="muted">
+          {% if e.version_before is not none and e.version_after is not none %}
+            {{ e.version_before }} → {{ e.version_after }}
+          {% elif e.version_after is not none %}
+            new → {{ e.version_after }}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <article class="muted">No audit entries match these filters.</article>
+  {% endif %}
+</section>
+{% endblock %}

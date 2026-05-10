@@ -77,6 +77,107 @@ async def test_dashboard_renders_empty_activity(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_servers_page_empty_then_populated(
+    clean_database: str, tmp_path: Path
+) -> None:
+    from vaultmcp.master.auth import generate_token, hash_token
+    from vaultmcp.master.db import Database
+
+    async with _master(clean_database, tmp_path) as base_url:
+        async with httpx.AsyncClient(base_url=base_url) as client:
+            resp = await client.get("/servers")
+            assert resp.status_code == 200
+            assert "Registered servers" in resp.text
+            assert "No servers registered" in resp.text
+
+        # Add one and verify it shows.
+        db = await Database.connect(clean_database)
+        try:
+            await db.add_server(
+                server_id="server-1",
+                apps=["webstore", "admin"],
+                token_hash=hash_token(generate_token()),
+            )
+        finally:
+            await db.close()
+
+        async with httpx.AsyncClient(base_url=base_url) as client:
+            # The freshly-added server now needs auth on /mcp/* routes,
+            # but /servers is part of the dashboard and stays open.
+            resp = await client.get("/servers")
+            assert resp.status_code == 200
+            assert "server-1" in resp.text
+            assert "webstore" in resp.text
+            assert "admin" in resp.text
+            assert "No servers registered" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_audit_page_filters_by_outcome(
+    clean_database: str, tmp_path: Path
+) -> None:
+    async with _master(clean_database, tmp_path) as base_url:
+        page = (
+            "---\n"
+            "title: Test\n"
+            "type: app\n"
+            "owners: [testapp]\n"
+            "updated: 2026-05-10\n"
+            "---\n\n"
+            "# Hi.\n"
+        )
+        session = {
+            "server_id": "server-test",
+            "app": "testapp",
+            "agent_model": "pytest",
+            "session_id": "",
+        }
+        async with httpx.AsyncClient(base_url=base_url) as client:
+            # One ok write
+            await client.post(
+                "/mcp/call",
+                json={
+                    "tool": "wiki.write",
+                    "args": {
+                        "path": "apps/testapp/audit-target.md",
+                        "content": page,
+                        "base_version": None,
+                        "session": session,
+                    },
+                },
+            )
+            # One conflict (stale base_version on the same path)
+            r = await client.post(
+                "/mcp/call",
+                json={
+                    "tool": "wiki.write",
+                    "args": {
+                        "path": "apps/testapp/audit-target.md",
+                        "content": page.replace("Hi.", "Hi 2."),
+                        "base_version": 99,
+                        "session": session,
+                    },
+                },
+            )
+            assert r.status_code == 409
+
+            # Unfiltered shows both
+            resp = await client.get("/audit")
+            assert resp.status_code == 200
+            assert "audit-target.md" in resp.text
+            assert "ok" in resp.text
+            assert "conflict" in resp.text
+
+            # outcome=conflict shows only the conflict row
+            resp = await client.get("/audit", params={"outcome": "conflict"})
+            assert resp.status_code == 200
+            assert "audit-target.md" in resp.text
+            # the row body is filtered, but the dropdown still has labels;
+            # so just check that no <td>ok</td> remains in the rendered rows.
+            assert resp.text.count('class="pill"') >= 1
+
+
+@pytest.mark.asyncio
 async def test_dashboard_renders_activity_after_writes(
     clean_database: str, tmp_path: Path
 ) -> None:

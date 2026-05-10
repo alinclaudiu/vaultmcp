@@ -632,3 +632,25 @@ class Database:
                 "SELECT id, apps, rotated_at FROM servers ORDER BY id"
             )
         return [(r["id"], list(r["apps"] or []), r["rotated_at"]) for r in rows]
+
+    async def servers_with_activity(
+        self,
+    ) -> list[tuple[str, list[str], datetime | None, datetime | None]]:
+        """As :meth:`list_servers` but also joins the most recent audit timestamp.
+
+        ``last_active`` is None when the server has never been seen in audit.
+        Used by the dashboard's Servers page.
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT s.id, s.apps, s.rotated_at,
+                       (SELECT MAX(ts) FROM audit a WHERE a.server_id = s.id) AS last_active
+                FROM servers s
+                ORDER BY s.id
+                """
+            )
+        return [
+            (r["id"], list(r["apps"] or []), r["rotated_at"], r["last_active"])
+            for r in rows
+        ]

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Servers{% endblock %}
+{% block content %}
+<section>
+  <h2 style="margin-bottom: 0.25rem">Registered servers</h2>
+  <p class="muted">
+    Bearer-token-authenticated servers. Auth is bypassed when this list is
+    empty (dev mode); the moment the first server is registered, every
+    /mcp/* request needs a valid token.
+  </p>
+
+  {% if servers %}
+  <table class="compact striped">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Apps</th>
+        <th>Last token rotation</th>
+        <th>Last active</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in servers %}
+      <tr>
+        <td><code>{{ s.id }}</code></td>
+        <td>
+          {% for app in s.apps %}<span class="pill">{{ app }}</span> {% endfor %}
+        </td>
+        <td>
+          {% if s.rotated_at %}
+          <span class="muted" title="{{ s.rotated_at.isoformat() }}">{{ s.rotated_at.strftime('%Y-%m-%d') }}</span>
+          {% else %}<span class="muted">never</span>{% endif %}
+        </td>
+        <td>
+          {% if s.last_active %}
+          <span class="muted" title="{{ s.last_active.isoformat() }}">{{ s.last_active.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+          {% else %}<span class="muted">no activity</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <article>
+    <p>No servers registered. Run:</p>
+    <pre><code>vaultmcp-master add-server --id server-1 --apps webstore,admin</code></pre>
+    <p>The token printed by that command goes into the agent's <code>VAULTMCP_TOKEN</code>
+       env var (or <code>&lt;state_dir&gt;/token</code> file).</p>
+  </article>
+  {% endif %}
+</section>
+{% endblock %}

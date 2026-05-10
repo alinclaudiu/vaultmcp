@@ -92,4 +92,81 @@ def build_router(
             request, "_activity_rows.html", {"events": await _recent_events()}
         )
 
+    # ---------- /servers ----------
+
+    @router.get("/servers", response_class=HTMLResponse, include_in_schema=False)
+    async def servers(request: Request) -> HTMLResponse:
+        db = await _resolve_db()
+        rows = await db.servers_with_activity()
+        servers_view = [
+            type(
+                "_S",
+                (),
+                {"id": sid, "apps": apps, "rotated_at": rot, "last_active": last},
+            )()
+            for sid, apps, rot, last in rows
+        ]
+        return templates.TemplateResponse(
+            request,
+            "servers.html",
+            {**base_ctx, "active": "servers", "servers": servers_view},
+        )
+
+    # ---------- /audit ----------
+
+    @router.get("/audit", response_class=HTMLResponse, include_in_schema=False)
+    async def audit(
+        request: Request,
+        path: str | None = None,
+        server_id: str | None = None,
+        app: str | None = None,
+        outcome: str | None = None,
+    ) -> HTMLResponse:
+        db = await _resolve_db()
+
+        # Outcome doesn't have a dedicated DB filter — we filter in Python.
+        rows = await db.list_audit(
+            path=path or None,
+            server_id=server_id or None,
+            app=app or None,
+            limit=500,
+        )
+        if outcome:
+            rows = [r for r in rows if r["outcome"] == outcome]
+        rows = rows[:200]
+
+        entries = [
+            type(
+                "_A",
+                (),
+                {
+                    "id": r["id"],
+                    "ts": r["ts"],
+                    "operation": r["operation"],
+                    "path": r["path"],
+                    "server_id": r["server_id"],
+                    "app": r["app"],
+                    "outcome": r["outcome"],
+                    "version_before": r["version_before"],
+                    "version_after": r["version_after"],
+                },
+            )()
+            for r in rows
+        ]
+        return templates.TemplateResponse(
+            request,
+            "audit.html",
+            {
+                **base_ctx,
+                "active": "audit",
+                "entries": entries,
+                "filters": {
+                    "path": path,
+                    "server_id": server_id,
+                    "app": app,
+                    "outcome": outcome,
+                },
+            },
+        )
+
     return router
