@@ -120,7 +120,11 @@ def build_app(config: MasterConfig) -> FastAPI:
     # Mounted before the JSON routes so /healthz etc. still take
     # precedence by being declared later on the same app.
     app.include_router(
-        build_dashboard_router(config=config, get_db=lambda: _get_db(state))
+        build_dashboard_router(
+            config=config,
+            get_db=lambda: _get_db(state),
+            get_broadcaster=lambda: _get_broadcaster(state),
+        )
     )
 
     # ---------- auth dependency ----------

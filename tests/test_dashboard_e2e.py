@@ -310,6 +310,74 @@ async def test_dashboard_audit_page_filters_by_outcome(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_sse_streams_live_events(
+    clean_database: str, tmp_path: Path
+) -> None:
+    """A wiki.write while a client is connected to /dashboard/sse-events
+    pushes a PageChanged frame to that client within a couple of seconds."""
+    async with _master(clean_database, tmp_path) as base_url:
+        page = (
+            "---\n"
+            "title: Live\n"
+            "type: app\n"
+            "owners: [testapp]\n"
+            "updated: 2026-05-10\n"
+            "---\n\n"
+            "# Hello.\n"
+        )
+        session = {
+            "server_id": "server-test",
+            "app": "testapp",
+            "agent_model": "pytest",
+            "session_id": "",
+        }
+        async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
+            received: list[str] = []
+
+            async def reader() -> None:
+                async with client.stream("GET", "/dashboard/sse-events") as resp:
+                    assert resp.status_code == 200
+                    assert resp.headers["content-type"].startswith("text/event-stream")
+                    async for chunk in resp.aiter_text():
+                        received.append(chunk)
+                        if any("PageChanged" in c for c in received):
+                            return
+
+            reader_task = asyncio.create_task(reader())
+            try:
+                # Give the SSE subscriber a moment to register before
+                # we trigger the event we want to read back.
+                await asyncio.sleep(0.5)
+
+                r = await client.post(
+                    "/mcp/call",
+                    json={
+                        "tool": "wiki.write",
+                        "args": {
+                            "path": "apps/testapp/live.md",
+                            "content": page,
+                            "base_version": None,
+                            "session": session,
+                        },
+                    },
+                )
+                assert r.status_code == 200, r.text
+
+                await asyncio.wait_for(reader_task, timeout=5)
+            finally:
+                if not reader_task.done():
+                    reader_task.cancel()
+                    try:
+                        await reader_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+            joined = "".join(received)
+            assert "event: PageChanged" in joined
+            assert "apps/testapp/live.md" in joined
+
+
+@pytest.mark.asyncio
 async def test_dashboard_vectors_page(
     clean_database: str, tmp_path: Path
 ) -> None:

@@ -4,14 +4,18 @@
 <section>
   <h2 style="margin-bottom: 0.25rem">Live activity</h2>
   <p class="muted">
-    Most recent {{ events|length }} events. Auto-refreshes every 5 seconds via HTMX.
-    SSE-driven push updates land alongside the live-events fanout in a follow-up.
+    Most recent {{ events|length }} events. Each row is pushed live from
+    the master's event broadcaster via Server-Sent Events; a 10 s
+    polling fallback covers the case where the SSE connection is closed
+    (proxy timeout, sleep, etc.).
   </p>
 
-  <div hx-get="/dashboard/activity-rows"
-       hx-trigger="every 5s"
-       hx-swap="innerHTML">
-    {% include "_activity_rows.html" %}
+  <div hx-ext="sse" sse-connect="/dashboard/sse-events">
+    <div hx-get="/dashboard/activity-rows"
+         hx-trigger="sse:PageChanged, sse:LogAppended, sse:PageDeleted, every 10s"
+         hx-swap="innerHTML">
+      {% include "_activity_rows.html" %}
+    </div>
   </div>
 </section>
 {% endblock %}

@@ -10,13 +10,14 @@ rely on the master's localhost bind for protection.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
@@ -24,6 +25,7 @@ from ... import __version__ as _pkg_version
 from ...shared.frontmatter import KNOWN_PAGE_TYPES
 from ..config import MasterConfig
 from ..db import Database
+from ..sse import EventBroadcaster, format_sse
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -46,6 +48,7 @@ def build_router(
     *,
     config: MasterConfig,
     get_db: Callable[[], Awaitable[Database] | Database],
+    get_broadcaster: Callable[[], EventBroadcaster] | None = None,
 ) -> APIRouter:
     """Construct the dashboard router.
 
@@ -53,6 +56,11 @@ def build_router(
     request — the master holds the pool in its app state and exposes it
     through this closure so the dashboard reads from the same pool the
     rest of the app does.
+
+    ``get_broadcaster`` exposes the master's :class:`EventBroadcaster`
+    so the dashboard can stream live events to the activity page via
+    Server-Sent Events. Optional — when ``None`` the SSE endpoint
+    returns 503 and the dashboard falls back to its 5 s polling.
     """
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     router = APIRouter()
@@ -104,6 +112,55 @@ def build_router(
     async def activity_rows(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
             request, "_activity_rows.html", {"events": await _recent_events()}
+        )
+
+    # ---------- /dashboard/sse-events ----------
+    #
+    # Live event stream powering the activity page's auto-refresh. Each
+    # PageChanged / LogAppended / PageDeleted from the master's
+    # broadcaster is forwarded as one SSE message; the front-end uses
+    # the `htmx-ext-sse` extension to translate that into an htmx event
+    # that re-fetches the activity table fragment.
+
+    @router.get(
+        "/dashboard/sse-events",
+        include_in_schema=False,
+        dependencies=deps,
+    )
+    async def sse_events(request: Request) -> StreamingResponse:
+        if get_broadcaster is None:
+            raise HTTPException(
+                status_code=503, detail="Event broadcaster not wired"
+            )
+        broadcaster = get_broadcaster()
+
+        async def stream() -> AsyncIterator[bytes]:
+            # Subscribe with no catch-up — the dashboard renders its
+            # initial table from a separate REST call.
+            agen = broadcaster.subscribe(since_global_version=None, prefix=None)
+            try:
+                async for ev in agen:
+                    if await request.is_disconnected():
+                        break
+                    yield format_sse(ev).encode("utf-8")
+            except asyncio.CancelledError:
+                raise
+            finally:
+                aclose = getattr(agen, "aclose", None)
+                if aclose is not None:
+                    try:
+                        await aclose()
+                    except Exception:
+                        pass
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
         )
 
     # ---------- /servers ----------
