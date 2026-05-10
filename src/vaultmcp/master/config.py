@@ -40,7 +40,7 @@ class MasterConfig:
     dashboard_password: str | None = None
 
     # Embedding provider name. Recognised values:
-    #   - "null/sha-1536"  : deterministic SHA-256-derived test stub
+    #   - "null/sha-1024"  : deterministic SHA-256-derived test stub
     #   - "openai-compat"  : OpenAI-style /embeddings on a configurable
     #                        base URL (works with litellm, vLLM, OpenAI itself)
     # When None, the worker doesn't run; embedding_jobs accumulate
@@ -51,7 +51,7 @@ class MasterConfig:
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_model: str | None = None
-    embedding_dim: int = 1536
+    embedding_dim: int = 1024
 
     # Optional path to the ownership/policy YAML config. None means
     # ``/srv/vaultmcp/config.yaml`` if it exists, else no path-level
@@ -97,5 +97,5 @@ class MasterConfig:
             embedding_base_url=os.environ.get("VAULTMCP_EMBEDDING_BASE_URL") or None,
             embedding_api_key=os.environ.get("VAULTMCP_EMBEDDING_API_KEY") or None,
             embedding_model=os.environ.get("VAULTMCP_EMBEDDING_MODEL") or None,
-            embedding_dim=int(os.environ.get("VAULTMCP_EMBEDDING_DIM", "1536")),
+            embedding_dim=int(os.environ.get("VAULTMCP_EMBEDDING_DIM", "1024")),
         )

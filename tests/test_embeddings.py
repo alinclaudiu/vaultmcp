@@ -28,7 +28,7 @@ async def test_null_embedding_is_deterministic() -> None:
 async def test_null_embedding_returns_correct_dimension() -> None:
     p = NullEmbeddingProvider()
     v = await p.embed("anything")
-    assert len(v) == p.dim == 1536
+    assert len(v) == p.dim == 1024
 
 
 @pytest.mark.asyncio
@@ -52,7 +52,7 @@ async def test_different_inputs_yield_different_vectors() -> None:
 
 
 def test_get_provider_resolves_known_name() -> None:
-    p = get_provider("null/sha-1536")
+    p = get_provider("null/sha-1024")
     assert isinstance(p, NullEmbeddingProvider)
 
 
@@ -66,7 +66,7 @@ def test_get_provider_raises_on_unknown_name() -> None:
 # =============================================================
 
 
-def _vec(dim: int = 1536, fill: float = 0.001) -> list[float]:
+def _vec(dim: int = 1024, fill: float = 0.001) -> list[float]:
     return [fill] * dim
 
 
@@ -74,7 +74,7 @@ def _make_provider_with_transport(
     handler,
     *,
     api_key: str | None = None,
-    dim: int = 1536,
+    dim: int = 1024,
 ) -> OpenAICompatibleEmbeddingProvider:
     """Build a provider whose internal httpx.AsyncClient routes through ``handler``.
 
@@ -111,7 +111,7 @@ async def test_openai_compat_returns_embedding_from_litellm_shape() -> None:
     finally:
         await p.aclose()
 
-    assert len(v) == 1536
+    assert len(v) == 1024
     assert seen["method"] == "POST"
     assert seen["url"] == "https://litellm.example.com/v1/embeddings"
     assert seen["json"] == {"model": "text-embedding-3-small", "input": "hello world"}
@@ -155,7 +155,7 @@ async def test_openai_compat_raises_on_dimension_mismatch() -> None:
         # Server returns the wrong number of dims.
         return httpx.Response(200, json={"data": [{"embedding": _vec(dim=384)}]})
 
-    p = _make_provider_with_transport(handler, dim=1536)
+    p = _make_provider_with_transport(handler, dim=1024)
     try:
         with pytest.raises(RuntimeError, match="384-d"):
             await p.embed("x")
@@ -202,7 +202,7 @@ def test_provider_name_includes_model() -> None:
 
 
 def test_build_provider_returns_null_for_null_name() -> None:
-    p = build_provider(name="null/sha-1536")
+    p = build_provider(name="null/sha-1024")
     assert isinstance(p, NullEmbeddingProvider)
 
 
@@ -212,7 +212,7 @@ def test_build_provider_returns_openai_compat_when_configured() -> None:
         base_url="https://example.com/v1",
         model="my-model",
         api_key="sk-x",
-        dim=1536,
+        dim=1024,
     )
     assert isinstance(p, OpenAICompatibleEmbeddingProvider)
     assert p.name == "openai-compat/my-model"

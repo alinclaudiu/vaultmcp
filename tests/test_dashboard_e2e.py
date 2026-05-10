@@ -392,7 +392,7 @@ async def test_dashboard_vectors_page(
     config = MasterConfig(
         database_url=clean_database,
         wiki_dir=wiki_dir,
-        embedding_provider="null/sha-1536",
+        embedding_provider="null/sha-1024",
     )
     app = build_app(config)
     server = uvicorn.Server(

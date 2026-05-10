@@ -34,7 +34,7 @@ async def _master_with_worker(database_url: str, tmp_path: Path) -> AsyncIterato
     config = MasterConfig(
         database_url=database_url,
         wiki_dir=wiki_dir,
-        embedding_provider="null/sha-1536",
+        embedding_provider="null/sha-1024",
     )
     app = build_app(config)
     server = uvicorn.Server(

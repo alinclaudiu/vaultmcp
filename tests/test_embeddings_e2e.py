@@ -39,7 +39,7 @@ async def _master_with_worker(database_url: str, tmp_path: Path) -> AsyncIterato
     config = MasterConfig(
         database_url=database_url,
         wiki_dir=wiki_dir,
-        embedding_provider="null/sha-1536",
+        embedding_provider="null/sha-1024",
     )
     app = build_app(config)
     server = uvicorn.Server(
@@ -118,8 +118,8 @@ async def test_worker_embeds_pages_after_write(
                 await asyncio.sleep(0.1)
             assert row is not None, "embedding never landed"
             assert row["version"] == 1
-            assert row["model"] == "null/sha-1536"
-            assert row["dim"] == 1536
+            assert row["model"] == "null/sha-1024"
+            assert row["dim"] == 1024
 
             remaining = await conn.fetchval(
                 "SELECT count(*) FROM embedding_jobs WHERE path = $1",

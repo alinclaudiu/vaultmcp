@@ -73,8 +73,8 @@ class NullEmbeddingProvider:
     for actual semantic search.
     """
 
-    name: str = "null/sha-1536"
-    dim: int = 1536
+    name: str = "null/sha-1024"
+    dim: int = 1024
 
     async def embed(self, text: str) -> list[float]:
         out: list[float] = []
@@ -116,7 +116,7 @@ class OpenAICompatibleEmbeddingProvider:
     base_url: str
     model: str
     api_key: str | None = None
-    dim: int = 1536
+    dim: int = 1024
     timeout_seconds: float = 30.0
     name: str = field(init=False)
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
@@ -173,7 +173,7 @@ class OpenAICompatibleEmbeddingProvider:
 # Each entry decides what `get_provider(config)` returns; some entries
 # instantiate without arguments (Null), others read additional config
 # fields (OpenAI-compatible).
-_NULL_PROVIDER_NAME: Final[str] = "null/sha-1536"
+_NULL_PROVIDER_NAME: Final[str] = "null/sha-1024"
 _OPENAI_COMPAT_NAME: Final[str] = "openai-compat"
 
 
@@ -196,7 +196,7 @@ def build_provider(
     base_url: str | None = None,
     model: str | None = None,
     api_key: str | None = None,
-    dim: int = 1536,
+    dim: int = 1024,
 ) -> EmbeddingProvider:
     """Construct a provider from config-shaped fields.
 

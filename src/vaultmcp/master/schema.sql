@@ -179,19 +179,43 @@ CREATE INDEX IF NOT EXISTS pages_content_tsv_idx
 -- Vector search (pgvector)
 --
 -- One row per page in `embeddings`; the worker keeps it in sync via the
--- `embedding_jobs` queue. Dimension is fixed per deployment (OpenAI
--- text-embedding-3-small = 1536 by default; the dim column lets us
--- migrate to a different model without dropping the table outright).
+-- `embedding_jobs` queue. Dimension is fixed per deployment.
+-- Default: 1024 (matches BGE-M3, mxbai-embed-large, snowflake-arctic-embed,
+-- and most modern open-source multilingual encoders served via Ollama/TEI).
+-- For OpenAI text-embedding-3-small (1536) or other models, change the
+-- literal below and re-run migrate; pre-existing embeddings are dropped
+-- by the migration block below if the column type doesn't match.
 -- =============================================================
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- Migration: if the embeddings table already exists with a vector
+-- dimension different from the literal in CREATE TABLE below, drop
+-- both embeddings + embedding_jobs so the CREATE re-runs with the
+-- new dim. Pre-1.0, schema is destructive across dim changes.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_attribute a
+        JOIN pg_class c ON a.attrelid = c.oid
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        WHERE n.nspname = 'public'
+          AND c.relname = 'embeddings'
+          AND a.attname = 'embedding'
+          AND format_type(a.atttypid, a.atttypmod) <> 'vector(1024)'
+    ) THEN
+        DROP TABLE IF EXISTS embeddings CASCADE;
+        DROP TABLE IF EXISTS embedding_jobs CASCADE;
+        RAISE NOTICE 'embeddings dimension changed; tables recreated';
+    END IF;
+END$$;
+
 CREATE TABLE IF NOT EXISTS embeddings (
     path           TEXT PRIMARY KEY REFERENCES pages(path) ON DELETE CASCADE,
     version        BIGINT NOT NULL,             -- the page version this embedding reflects
-    model          TEXT NOT NULL,               -- e.g. "openai/text-embedding-3-small"
+    model          TEXT NOT NULL,               -- e.g. "openai-compat/bge-m3"
     dim            INT NOT NULL,                -- vector dimension; must match column type
-    embedding      vector(1536) NOT NULL,
+    embedding      vector(1024) NOT NULL,
     computed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
