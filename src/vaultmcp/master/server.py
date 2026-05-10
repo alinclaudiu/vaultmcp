@@ -79,24 +79,28 @@ def build_app(config: MasterConfig) -> FastAPI:
             LOG.info("Loaded %d ownership rule(s)", len(ownership))
 
         embedding_worker: EmbeddingWorker | None = None
+        embedding_provider = None
         if config.embedding_provider:
             try:
-                provider = get_provider(config.embedding_provider)
+                embedding_provider = get_provider(config.embedding_provider)
             except KeyError:
                 LOG.error(
                     "Unknown embedding provider %r; worker disabled",
                     config.embedding_provider,
                 )
             else:
-                embedding_worker = EmbeddingWorker(db=db, provider=provider)
+                embedding_worker = EmbeddingWorker(db=db, provider=embedding_provider)
                 await embedding_worker.start()
-                LOG.info("Embedding worker started (provider=%s)", provider.name)
+                LOG.info(
+                    "Embedding worker started (provider=%s)", embedding_provider.name
+                )
 
         state["db"] = db
         state["broadcaster"] = broadcaster
         state["wiki_dir"] = config.wiki_dir
         state["max_bytes"] = config.max_file_size_bytes
         state["ownership"] = ownership
+        state["embedder"] = embedding_provider
 
         try:
             yield
@@ -163,6 +167,7 @@ def build_app(config: MasterConfig) -> FastAPI:
         wiki_dir = _get_wiki_dir(state)
         max_bytes = _get_max_bytes(state)
         ownership = _get_ownership(state)
+        embedder = state.get("embedder")  # may be None
         try:
             return await call_handler_by_name(
                 req.tool,
@@ -172,6 +177,7 @@ def build_app(config: MasterConfig) -> FastAPI:
                 authed=authed,
                 max_bytes=max_bytes,
                 ownership=ownership,
+                embedder=embedder,  # type: ignore[arg-type]
             )
         except ConflictError as exc:
             raise HTTPException(

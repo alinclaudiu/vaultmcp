@@ -9,6 +9,7 @@ server module wires them into the actual MCP transport.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from ..shared.types import (
 )
 from .auth import AuthenticatedServer
 from .db import ConflictResult, Database, WriteResult
+from .embeddings import EmbeddingProvider
 from .errors import (
     ConflictError,
     ForbiddenError,
@@ -208,26 +210,112 @@ async def handle_list(db: Database, inp: ListInput) -> ListOutput:
     )
 
 
-async def handle_search(db: Database, inp: SearchInput) -> SearchOutput:
-    rows = await db.search_pages(
-        query=inp.query,
-        prefix=inp.prefix,
-        type_filter=inp.type,
-        limit=inp.limit,
-    )
-    entries = [
-        SearchResult(
-            path=r["path"],
-            type=r["type"],
-            owners=list(r["owners"] or []),
-            updated=r["updated"],
-            version=r["version"],
-            score=float(r["score"] or 0.0),
-            snippet=r["snippet"] or "",
+async def handle_search(
+    db: Database,
+    inp: SearchInput,
+    *,
+    embedder: EmbeddingProvider | None = None,
+) -> SearchOutput:
+    if inp.mode in ("semantic", "hybrid") and embedder is None:
+        raise ValidationFailed(
+            f"Search mode {inp.mode!r} requires an embedding provider; "
+            "set VAULTMCP_EMBEDDING_PROVIDER on the master"
         )
-        for r in rows
-    ]
-    return SearchOutput(entries=entries)
+
+    if inp.mode == "lexical":
+        rows = await db.search_pages(
+            query=inp.query,
+            prefix=inp.prefix,
+            type_filter=inp.type,
+            limit=inp.limit,
+        )
+        entries = [_search_row_to_result(r) for r in rows]
+        return SearchOutput(entries=entries)
+
+    assert embedder is not None  # narrowed by the guard above
+    query_vector = await embedder.embed(inp.query)
+
+    if inp.mode == "semantic":
+        rows = await db.search_pages_semantic(
+            query_vector=query_vector,
+            prefix=inp.prefix,
+            type_filter=inp.type,
+            limit=inp.limit,
+        )
+        entries = [_search_row_to_result(r) for r in rows]
+        return SearchOutput(entries=entries)
+
+    # ---- hybrid ----
+    # Pull a deeper window from each ranker so RRF has room to mix.
+    window = max(inp.limit * 4, 50)
+    lex_rows, sem_rows = await asyncio.gather(
+        db.search_pages(
+            query=inp.query,
+            prefix=inp.prefix,
+            type_filter=inp.type,
+            limit=window,
+        ),
+        db.search_pages_semantic(
+            query_vector=query_vector,
+            prefix=inp.prefix,
+            type_filter=inp.type,
+            limit=window,
+        ),
+    )
+    fused = _reciprocal_rank_fusion(lex_rows, sem_rows, k=60, limit=inp.limit)
+    return SearchOutput(entries=fused)
+
+
+def _search_row_to_result(r: dict[str, Any]) -> SearchResult:
+    return SearchResult(
+        path=r["path"],
+        type=r["type"],
+        owners=list(r["owners"] or []),
+        updated=r["updated"],
+        version=r["version"],
+        score=float(r["score"] or 0.0),
+        snippet=r["snippet"] or "",
+    )
+
+
+def _reciprocal_rank_fusion(
+    lex_rows: list[dict[str, Any]],
+    sem_rows: list[dict[str, Any]],
+    *,
+    k: int,
+    limit: int,
+) -> list[SearchResult]:
+    """Combine two ranked lists by RRF: score = Σ 1 / (k + rank_i).
+
+    Snippets and metadata are taken from whichever list saw the doc
+    first (lexical preferred, since it has ts_headline output).
+    """
+    fused: dict[str, dict[str, Any]] = {}
+    for rank, r in enumerate(lex_rows, start=1):
+        fused[r["path"]] = {"row": r, "score": 1.0 / (k + rank)}
+    for rank, r in enumerate(sem_rows, start=1):
+        existing = fused.get(r["path"])
+        if existing is None:
+            fused[r["path"]] = {"row": r, "score": 1.0 / (k + rank)}
+        else:
+            existing["score"] += 1.0 / (k + rank)
+
+    ordered = sorted(fused.values(), key=lambda x: x["score"], reverse=True)[:limit]
+    out: list[SearchResult] = []
+    for entry in ordered:
+        r = entry["row"]
+        out.append(
+            SearchResult(
+                path=r["path"],
+                type=r["type"],
+                owners=list(r["owners"] or []),
+                updated=r["updated"],
+                version=r["version"],
+                score=float(entry["score"]),
+                snippet=r["snippet"] or "",
+            )
+        )
+    return out
 
 
 async def handle_audit(db: Database, inp: AuditInput) -> AuditOutput:
@@ -293,6 +381,7 @@ async def call_handler_by_name(
     authed: AuthenticatedServer | None = None,
     max_bytes: int = DEFAULT_MAX_FILE_SIZE_BYTES,
     ownership: OwnershipRules | None = None,
+    embedder: EmbeddingProvider | None = None,
 ) -> dict[str, Any]:
     """Dispatch a tool call by name. Returns a JSON-serializable dict.
 
@@ -325,6 +414,8 @@ async def call_handler_by_name(
     if name == "wiki.audit":
         return (await handle_audit(db, AuditInput(**args))).model_dump(mode="json")
     if name == "wiki.search":
-        return (await handle_search(db, SearchInput(**args))).model_dump(mode="json")
+        return (
+            await handle_search(db, SearchInput(**args), embedder=embedder)
+        ).model_dump(mode="json")
 
     raise ToolError(f"Unknown tool: {name}", status=400)

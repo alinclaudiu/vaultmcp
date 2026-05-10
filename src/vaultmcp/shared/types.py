@@ -163,17 +163,25 @@ class LogEntryOutput(BaseModel):
 # =============================================================
 
 
+SearchMode = Literal["lexical", "semantic", "hybrid"]
+
+
 class SearchInput(BaseModel):
     """Query inputs for ``wiki.search``.
 
-    v0.4 lexical-only. The semantic / hybrid path lands once embeddings
-    are wired up; the on-the-wire shape stays the same so callers don't
-    have to change.
+    ``mode`` selects the ranker:
+
+    - ``lexical`` (default) — Postgres ``websearch_to_tsquery`` over a
+      tsvector that combines title (weight A) and body (weight B).
+    - ``semantic`` — pgvector cosine distance against ``embeddings``.
+      Requires the master to have an embedding provider configured.
+    - ``hybrid`` — both rankers combined via Reciprocal Rank Fusion.
     """
 
     query: str = Field(..., min_length=1)
     prefix: str | None = None
     type: PageType | None = None
+    mode: SearchMode = "lexical"
     limit: int = Field(default=20, ge=1, le=200)
 
 

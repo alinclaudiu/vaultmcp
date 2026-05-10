@@ -584,6 +584,43 @@ class Database:
 
     # ---------- search ----------
 
+    async def search_pages_semantic(
+        self,
+        *,
+        query_vector: list[float],
+        prefix: str | None = None,
+        type_filter: str | None = None,
+        limit: int = 20,
+    ) -> list[asyncpg.Record]:
+        """Cosine-distance search against the ``embeddings`` table.
+
+        Returns rows with ``score`` = ``1 - distance`` (i.e. cosine
+        similarity in [-1, 1]; for unit-norm vectors, in [0, 1]).
+        """
+        vec_literal = "[" + ",".join(f"{x:.7f}" for x in query_vector) + "]"
+        params: list[Any] = [vec_literal]
+        clauses = ["TRUE"]
+
+        if prefix:
+            params.append(prefix + "%")
+            clauses.append(f"p.path LIKE ${len(params)}")
+        if type_filter:
+            params.append(type_filter)
+            clauses.append(f"p.type = ${len(params)}")
+
+        params.append(limit)
+        sql = (
+            "SELECT p.path, p.type, p.owners, p.updated, p.version, "
+            "1 - (e.embedding <=> $1::vector) AS score, "
+            "'' AS snippet "
+            "FROM embeddings e JOIN pages p ON p.path = e.path "
+            "WHERE " + " AND ".join(clauses)
+            + f" ORDER BY e.embedding <=> $1::vector ASC LIMIT ${len(params)}"
+        )
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(sql, *params)
+
     async def search_pages(
         self,
         *,
