@@ -2,6 +2,49 @@
 
 All notable changes to VaultMCP are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.1] — 2026-05-10
+
+Polish on top of `v0.4.0`. The biggest user-facing change is that the
+default embedding dimension drops from 1536 to 1024 — see the schema
+migration note below if you're upgrading.
+
+### Added
+
+- **OpenAI-compatible embedding provider**
+  (`vaultmcp.master.embeddings.OpenAICompatibleEmbeddingProvider`).
+  POSTs to `/embeddings` on a configurable base URL with the OpenAI
+  request shape, validates dimension. Same code talks to OpenAI,
+  litellm proxy, vLLM with `--embeddings`, LocalAI, etc. Configure
+  via `VAULTMCP_EMBEDDING_PROVIDER=openai-compat` plus
+  `VAULTMCP_EMBEDDING_BASE_URL` / `_API_KEY` / `_MODEL`.
+- **SSE-driven live activity** on the dashboard. `/dashboard/sse-events`
+  forwards `EventBroadcaster` notifications as Server-Sent Events; the
+  activity table re-fetches on each. A 10 s polling fallback covers
+  closed connections (proxy idle, laptop sleep).
+- **Worker state** surfaced on the `/servers` dashboard: provider
+  name, embedded pages, pending / failed job counts, last error.
+
+### Changed
+
+- **Default embedding dimension is now 1024** (from 1536). Matches
+  BGE-M3, mxbai-embed-large, snowflake-arctic-embed, and most modern
+  open-source multilingual encoders served via Ollama / TEI.
+  - Schema migration: `schema.sql` opens with a `DO` block that drops
+    `embeddings` + `embedding_jobs` if their existing column type
+    doesn't match the new literal. Pre-1.0 the tables are
+    considered ephemeral on dim changes; the worker re-embeds
+    everything on the next master start.
+  - For OpenAI text-embedding-3-small (1536), set
+    `VAULTMCP_EMBEDDING_DIM=1536` *and* edit the `vector(1024)`
+    literal in `schema.sql` before running `migrate`.
+
+### Fixed
+
+- `EventBroadcaster.stop()` now `remove_listener`s on the LISTEN
+  connection before the pool reclaim. Eliminates the
+  `InterfaceWarning: ... is being released to the pool but has 1
+  active notification listener` that surfaced on every test teardown.
+
 ## [0.4.0] — 2026-05-10
 
 **Security + Search + Dashboard.** Combines the v0.3 (security) and
