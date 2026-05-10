@@ -573,6 +573,36 @@ class Database:
                 )
                 await conn.execute("DELETE FROM embedding_jobs WHERE id = $1", job_id)
 
+    async def embedding_queue_stats(self) -> dict[str, Any]:
+        """Aggregate counts for the dashboard's worker section.
+
+        ``pending`` = jobs whose ``attempts`` is still below the worker's
+        retry cap (5). ``failed`` = jobs that exhausted retries and are
+        sitting in the queue with a last_error attached.
+        """
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE attempts < 5) AS pending,
+                    COUNT(*) FILTER (WHERE attempts >= 5) AS failed
+                FROM embedding_jobs
+                """
+            )
+            embedded = await conn.fetchval("SELECT COUNT(*) FROM embeddings")
+            last_err = await conn.fetchrow(
+                "SELECT path, version, last_error FROM embedding_jobs "
+                "WHERE last_error IS NOT NULL "
+                "ORDER BY enqueued_at DESC LIMIT 1"
+            )
+        return {
+            "pending": int(row["pending"] or 0),
+            "failed": int(row["failed"] or 0),
+            "embedded": int(embedded or 0),
+            "last_error": last_err["last_error"] if last_err else None,
+            "last_error_path": last_err["path"] if last_err else None,
+        }
+
     async def fail_embedding_job(self, *, job_id: int, error: str) -> None:
         """Record an error on a job so the dashboard surfaces it; attempts already bumped."""
         async with self.pool.acquire() as conn:

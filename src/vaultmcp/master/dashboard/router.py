@@ -49,6 +49,7 @@ def build_router(
     config: MasterConfig,
     get_db: Callable[[], Awaitable[Database] | Database],
     get_broadcaster: Callable[[], EventBroadcaster] | None = None,
+    get_embedder_name: Callable[[], str | None] | None = None,
 ) -> APIRouter:
     """Construct the dashboard router.
 
@@ -170,17 +171,25 @@ def build_router(
         db = await _resolve_db()
         rows = await db.servers_with_activity()
         servers_view = [
-            type(
-                "_S",
-                (),
-                {"id": sid, "apps": apps, "rotated_at": rot, "last_active": last},
-            )()
+            SimpleNamespace(
+                id=sid, apps=apps, rotated_at=rot, last_active=last
+            )
             for sid, apps, rot, last in rows
         ]
+        worker_stats = await db.embedding_queue_stats()
+        worker_provider = (
+            get_embedder_name() if get_embedder_name is not None else None
+        )
         return templates.TemplateResponse(
             request,
             "servers.html",
-            {**base_ctx, "active": "servers", "servers": servers_view},
+            {
+                **base_ctx,
+                "active": "servers",
+                "servers": servers_view,
+                "worker_provider": worker_provider,
+                "worker_stats": worker_stats,
+            },
         )
 
     # ---------- /search ----------

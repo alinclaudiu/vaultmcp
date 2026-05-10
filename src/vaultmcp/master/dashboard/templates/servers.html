@@ -1,6 +1,51 @@
 {% extends "base.html" %}
 {% block title %}Servers{% endblock %}
 {% block content %}
+
+<section>
+  <h2 style="margin-bottom: 0.25rem">Embedding worker</h2>
+  {% if worker_provider %}
+  <p class="muted">Provider <code>{{ worker_provider }}</code>.</p>
+  <table class="compact striped">
+    <thead>
+      <tr>
+        <th>Embedded pages</th>
+        <th>Pending jobs</th>
+        <th>Failed jobs</th>
+        <th>Last error</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{{ worker_stats.embedded }}</td>
+        <td>
+          {% if worker_stats.pending > 0 %}
+          <span class="pill" style="background:#fff3cd;color:#664d03">{{ worker_stats.pending }}</span>
+          {% else %}{{ worker_stats.pending }}{% endif %}
+        </td>
+        <td>
+          {% if worker_stats.failed > 0 %}
+          <span class="pill" style="background:#ffd6d6;color:#800">{{ worker_stats.failed }}</span>
+          {% else %}{{ worker_stats.failed }}{% endif %}
+        </td>
+        <td>
+          {% if worker_stats.last_error %}
+          <code class="path">{{ worker_stats.last_error_path }}</code>:
+          <span class="muted">{{ worker_stats.last_error[:120] }}{% if worker_stats.last_error|length > 120 %}…{% endif %}</span>
+          {% else %}<span class="muted">none</span>{% endif %}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  {% else %}
+  <article class="muted">
+    No embedding provider configured. Set <code>VAULTMCP_EMBEDDING_PROVIDER</code>
+    on the master to enable semantic + hybrid search and the
+    <a href="/vectors">vector explorer</a>.
+  </article>
+  {% endif %}
+</section>
+
 <section>
   <h2 style="margin-bottom: 0.25rem">Registered servers</h2>
   <p class="muted">

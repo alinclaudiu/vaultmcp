@@ -129,11 +129,16 @@ def build_app(config: MasterConfig) -> FastAPI:
     # Dashboard router (read-only HTML views over Postgres state).
     # Mounted before the JSON routes so /healthz etc. still take
     # precedence by being declared later on the same app.
+    def _embedder_name() -> str | None:
+        emb = state.get("embedder")
+        return getattr(emb, "name", None) if emb is not None else None
+
     app.include_router(
         build_dashboard_router(
             config=config,
             get_db=lambda: _get_db(state),
             get_broadcaster=lambda: _get_broadcaster(state),
+            get_embedder_name=_embedder_name,
         )
     )
 

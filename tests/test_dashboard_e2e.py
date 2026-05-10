@@ -221,6 +221,10 @@ async def test_dashboard_servers_page_empty_then_populated(
             assert resp.status_code == 200
             assert "Registered servers" in resp.text
             assert "No servers registered" in resp.text
+            # Worker section: master has no provider configured here, so
+            # the empty-state hint appears.
+            assert "Embedding worker" in resp.text
+            assert "No embedding provider configured" in resp.text
 
         # Add one and verify it shows.
         db = await Database.connect(clean_database)
@@ -375,6 +379,59 @@ async def test_dashboard_sse_streams_live_events(
             joined = "".join(received)
             assert "event: PageChanged" in joined
             assert "apps/testapp/live.md" in joined
+
+
+@pytest.mark.asyncio
+async def test_dashboard_servers_page_shows_worker_provider_when_configured(
+    clean_database: str, tmp_path: Path
+) -> None:
+    """When VAULTMCP_EMBEDDING_PROVIDER is set, /servers exposes the
+    provider name + queue depth so an operator can see a backed-up
+    worker at a glance."""
+    from vaultmcp.master.config import MasterConfig
+    from vaultmcp.master.server import build_app
+
+    port = _free_port()
+    wiki_dir = tmp_path / "master_wiki"
+    wiki_dir.mkdir()
+    config = MasterConfig(
+        database_url=clean_database,
+        wiki_dir=wiki_dir,
+        embedding_provider="null/sha-1024",
+    )
+    app = build_app(config)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, host="127.0.0.1", port=port, log_level="warning", lifespan="on"
+        )
+    )
+    task = asyncio.create_task(server.serve())
+    try:
+        deadline = time.monotonic() + 10
+        while not getattr(server, "started", False):
+            if time.monotonic() > deadline:
+                raise AssertionError("master never started")
+            await asyncio.sleep(0.05)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{port}"
+        ) as client:
+            resp = await client.get("/servers")
+            assert resp.status_code == 200
+            assert "Embedding worker" in resp.text
+            assert "null/sha-1024" in resp.text
+            # Empty-state for queue counts (no writes yet).
+            assert "Embedded pages" in resp.text
+            assert "No embedding provider configured" not in resp.text
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(task, timeout=5)
+        except TimeoutError:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 @pytest.mark.asyncio
