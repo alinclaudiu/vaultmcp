@@ -77,6 +77,59 @@ async def test_dashboard_renders_empty_activity(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_search_page_renders_results(
+    clean_database: str, tmp_path: Path
+) -> None:
+    async with _master(clean_database, tmp_path) as base_url:
+        page = (
+            "---\n"
+            "title: Inventory\n"
+            "type: app\n"
+            "owners: [testapp]\n"
+            "updated: 2026-05-10\n"
+            "---\n\n"
+            "We track warehouse stock across regions.\n"
+        )
+        session = {
+            "server_id": "server-test",
+            "app": "testapp",
+            "agent_model": "pytest",
+            "session_id": "",
+        }
+        async with httpx.AsyncClient(base_url=base_url) as client:
+            await client.post(
+                "/mcp/call",
+                json={
+                    "tool": "wiki.write",
+                    "args": {
+                        "path": "apps/testapp/inv.md",
+                        "content": page,
+                        "base_version": None,
+                        "session": session,
+                    },
+                },
+            )
+
+            # Empty form (no query) — page renders without results.
+            resp = await client.get("/search")
+            assert resp.status_code == 200
+            assert "Search" in resp.text
+            assert "<form" in resp.text
+
+            # Real query — finds the page and shows snippet.
+            resp = await client.get("/search", params={"q": "warehouse"})
+            assert resp.status_code == 200
+            assert "apps/testapp/inv.md" in resp.text
+            # Snippet markers from ts_headline should have been converted to <mark>.
+            assert "<mark>" in resp.text or "warehouse" in resp.text.lower()
+
+            # No-match query
+            resp = await client.get("/search", params={"q": "nonexistentterm"})
+            assert resp.status_code == 200
+            assert "No matches" in resp.text
+
+
+@pytest.mark.asyncio
 async def test_dashboard_servers_page_empty_then_populated(
     clean_database: str, tmp_path: Path
 ) -> None:

@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from types import SimpleNamespace
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from ... import __version__ as _pkg_version
+from ...shared.frontmatter import KNOWN_PAGE_TYPES
 from ..config import MasterConfig
 from ..db import Database
 
@@ -110,6 +112,50 @@ def build_router(
             request,
             "servers.html",
             {**base_ctx, "active": "servers", "servers": servers_view},
+        )
+
+    # ---------- /search ----------
+
+    @router.get("/search", response_class=HTMLResponse, include_in_schema=False)
+    async def search(
+        request: Request,
+        q: str | None = None,
+        prefix: str | None = None,
+        type_: str | None = Query(None, alias="type"),
+    ) -> HTMLResponse:
+        entries: list[SimpleNamespace] = []
+        if q:
+            db = await _resolve_db()
+            rows = await db.search_pages(
+                query=q,
+                prefix=prefix or None,
+                type_filter=type_ or None,
+                limit=50,
+            )
+            entries = [
+                SimpleNamespace(
+                    path=r["path"],
+                    type=r["type"],
+                    owners=list(r["owners"] or []),
+                    updated=r["updated"],
+                    version=r["version"],
+                    score=float(r["score"] or 0.0),
+                    snippet=r["snippet"] or "",
+                )
+                for r in rows
+            ]
+        return templates.TemplateResponse(
+            request,
+            "search.html",
+            {
+                **base_ctx,
+                "active": "search",
+                "query": q,
+                "prefix": prefix,
+                "type": type_,
+                "entries": entries,
+                "known_types": sorted(KNOWN_PAGE_TYPES),
+            },
         )
 
     # ---------- /audit ----------

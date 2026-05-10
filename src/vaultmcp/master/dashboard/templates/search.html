@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<section>
+  <h2 style="margin-bottom: 0.25rem">Search</h2>
+  <p class="muted">
+    Lexical full-text search across page titles + bodies. Supports
+    phrases, <code>-exclusions</code>, and <code>OR</code>
+    (<code>websearch_to_tsquery</code> syntax).
+    Semantic + hybrid modes land once pgvector is wired up.
+  </p>
+
+  <form method="get" action="/search">
+    <fieldset class="grid">
+      <label>
+        Query
+        <input type="search" name="q" value="{{ query or '' }}"
+               placeholder="warehouse stock OR inventory" autofocus required>
+      </label>
+      <label>
+        Path prefix
+        <input type="text" name="prefix" value="{{ prefix or '' }}"
+               placeholder="apps/">
+      </label>
+      <label>
+        Type
+        <select name="type">
+          <option value=""{% if not type %} selected{% endif %}>any</option>
+          {% for t in known_types %}
+          <option value="{{ t }}"{% if type==t %} selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </fieldset>
+    <button type="submit">Search</button>
+  </form>
+
+  {% if query %}
+    {% if entries %}
+    <p class="muted">{{ entries|length }} result{{ 's' if entries|length != 1 else '' }}.</p>
+    <table class="compact striped">
+      <thead>
+        <tr>
+          <th>Path</th>
+          <th>Type</th>
+          <th>Updated</th>
+          <th>Score</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in entries %}
+        <tr>
+          <td>
+            <code class="path">{{ r.path }}</code>
+            {% if r.snippet %}
+            <div class="muted" style="margin-top:0.25rem">{{ r.snippet | replace('<<', '<mark>') | replace('>>', '</mark>') | safe }}</div>
+            {% endif %}
+          </td>
+          <td><span class="pill">{{ r.type }}</span></td>
+          <td><span class="muted" title="{{ r.updated.isoformat() }}">{{ r.updated.strftime('%Y-%m-%d') }}</span></td>
+          <td class="muted">{{ '%.3f'|format(r.score) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <article class="muted">No matches for <code>{{ query }}</code>.</article>
+    {% endif %}
+  {% endif %}
+</section>
+{% endblock %}
