@@ -8,7 +8,7 @@ For the architectural deep-dive, read [`DESIGN.md`](DESIGN.md). For the project'
 
 **VaultMCP** is an MCP-first knowledge mesh for AI agents. Postgres+pgvector at master; small Python agent on each server mirrors the wiki locally and syncs through MCP. Sibling project of [VaultMesh](https://github.com/alinclaudiu/vaultmesh) — same wiki structure, different transport (MCP+DB vs git+files).
 
-Status: **v0.0.1 was design-only**; **v0.2 implementation skeleton landed in commit 48bf859c** (master + agent + tests + deploy). Code requires Python 3.11+ and Postgres 15+.
+Status: **v0.6.1 is the current tag**; ROADMAP phases v0.0 → v0.6 all landed. The `main` branch beyond v0.6.1 has the network MCP transport (`/mcp/streamable`), the ruff cleanup pass, and a Claude Desktop integration walkthrough in the README — likely cut as v0.7.0 when the next ROADMAP item begins. First production deploy is live on `webApps` (master) + `BcDev` (first agent). Code requires Python 3.11+ and Postgres 15+ with pgvector.
 
 ## Confirmed stack (do not change without an ADR)
 
@@ -77,9 +77,9 @@ These are pinned in `DESIGN.md` §17. The key ones to keep in mind while coding:
 - **D9. DB-first.** Postgres is canonical. Files on master are a projection rendered post-commit. Don't add code that treats files as authoritative.
 - **D5. Optimistic concurrency via version etag.** No row locks beyond the `SELECT ... FOR UPDATE` inside `write_page`. Conflicts return 409 with the master's current state; the agent replaces local content (no auto-merge).
 - **D6. Append-only log bypasses etag.** `wiki.append_log` always succeeds; it's an INSERT, not a write-with-version.
-- **D8. Full mirror on each agent.** Don't add prefix-based caching or eviction in v0.2.
-- **D11. Dashboard is core.** When v0.4 lands, it ships in this repo (FastAPI + Jinja2 + HTMX), not a separate project.
-- **D12. Extensions share the DB.** When v0.5 lands, other apps create tables under `ext_<name>_*` namespaces and share the `embeddings` and `audit` infrastructure.
+- **D8. Full mirror on each agent.** Don't add prefix-based caching or eviction; agents always carry the full wiki.
+- **D11. Dashboard is core.** Ships in this repo (FastAPI + Jinja2 + HTMX), not a separate project.
+- **D12. Extensions share the DB.** Other apps create tables under `ext_<name>_*` namespaces and share the `embeddings` + `events` + `audit` infrastructure. Every extension runs under its own NOLOGIN Postgres role; `ext.query` / `ext.exec` use `SET LOCAL ROLE` so the role's GRANTs are the security boundary.
 
 ## Coding conventions
 
@@ -107,18 +107,31 @@ This is a regular Python project, not a wiki — there's **no `vs`/`vp` discipli
 - Keep `main` deployable. The `make test-unit` target should always pass on `main`.
 - The repo's commit history starts from a single seed commit `3762f0f` authored as `alinclaudiu` via the GitHub noreply email. Match that pattern: don't introduce author identities that include personal email addresses.
 
+## What's already in (don't re-implement)
+
+Everything from v0.2 → v0.6.1 has shipped. Concretely:
+
+- **Bearer-token auth** (`vaultmcp.master.auth`) + `add-server` / `rotate-token` / `remove-server` / `list-servers` CLI. Auth is bypassed only when the `servers` table is empty (dev mode).
+- **Per-server-app authorization** (session.server_id ↔ token, session.app ↔ servers.apps).
+- **Path-level ownership** rules from `/srv/vaultmcp/config.yaml` (`producer=`, `write=human-only`).
+- **Validation middleware** — size, encoding, required frontmatter keys, secret-pattern catalog.
+- **`wiki.audit`** MCP tool over the audit log.
+- **Embeddings + pgvector** — `embeddings` + `embedding_jobs` tables, async worker, `OpenAICompatibleEmbeddingProvider` (works with litellm / vLLM / OpenAI), `NullEmbeddingProvider` for tests, default dim 1024.
+- **`wiki.search`** with `mode=lexical | semantic | hybrid` (RRF combine).
+- **Dashboard** — five pages (activity, servers, search, audit, vectors) at `/`, HTTP Basic gate via `VAULTMCP_DASHBOARD_PASSWORD`, SSE-driven live activity.
+- **Extensions** — `ext.register / list / declare_table / query / exec / embed / emit_event / deregister` with real Postgres-role isolation per extension.
+- **Official MCP transport** — `vaultmcp-master mcp-stdio` (stdio) + `/mcp/streamable` (network). The legacy `/mcp/call` JSON-over-HTTP shim from v0.2 is still around.
+- **`/metrics`** Prometheus text endpoint.
+- **`vaultmcp-master render-all`** — rebuild `/srv/vaultmcp/wiki/` from the DB after a restore.
+- **Backup runbook + perf baseline** — `deploy/BACKUP.md`, `deploy/PERFORMANCE.md`. Single + concurrent benchmarks under `bench/`.
+
 ## What NOT to do (yet)
 
-These belong to later phases — if you find yourself wanting them, open an issue first:
-
-- ❌ **Authentication / token validation** — Phase 3 (issue tracking pending). Leave master localhost-bound for now.
-- ❌ **Ownership / authorization middleware** — Phase 3.
-- ❌ **Validation middleware** (frontmatter required keys, secret patterns) — Phase 3. We currently parse frontmatter as best-effort and reject malformed YAML, nothing more.
-- ❌ **Embeddings / pgvector** — Phase 4. Don't add the column or the worker yet.
-- ❌ **Dashboard** — Phase 4.
-- ❌ **`ext.*` MCP tools** — Phase 5.
 - ❌ **`wiki.delete`** — out of scope; pages are marked `status: deprecated` in frontmatter instead.
-- ❌ **Multi-master / federation** — out of scope.
+- ❌ **Multi-master / federation** — out of scope until v1.x.
+- ❌ **structlog migration** — `structlog` is in deps but the codebase uses stdlib `logging`. The migration is intentionally deferred to v1.x — the value/risk ratio is poor right now.
+- ❌ **`Co-Authored-By: Claude` trailers on commits** — the user explicitly does not want them. Commit author stays as the user.
+- ❌ **Adding `claude-code` to the GitHub topics** — established preference from the VaultMesh sibling project.
 
 ## Where to read for more context
 
@@ -126,8 +139,11 @@ These belong to later phases — if you find yourself wanting them, open an issu
 - [`DESIGN.md`](DESIGN.md) — full architecture (start with §3 storage, §4 MCP tools, §5 conflicts, §6 offline)
 - [`docs/01-vision.md`](docs/01-vision.md) — why this project exists separately from VaultMesh
 - [`docs/02-vs-vaultmesh.md`](docs/02-vs-vaultmesh.md) — when to pick which
-- [`docs/03-extensibility.md`](docs/03-extensibility.md) — the OB1-style extension model (lands in v0.5)
-- [`docs/04-dashboard.md`](docs/04-dashboard.md) — the live dashboard (lands in v0.4)
+- [`docs/03-extensibility.md`](docs/03-extensibility.md) — the OB1-style extension model (shipped in v0.5/v0.6)
+- [`docs/04-dashboard.md`](docs/04-dashboard.md) — the live dashboard (shipped in v0.4)
+- [`deploy/README.md`](deploy/README.md) — production install, including the one-time superuser steps (`CREATE EXTENSION vector`, `ALTER ROLE vaultmcp WITH CREATEROLE`)
+- [`deploy/BACKUP.md`](deploy/BACKUP.md) — daily backup script + restore + reverse-proxy / TLS guidance
+- [`deploy/PERFORMANCE.md`](deploy/PERFORMANCE.md) — baseline numbers from `bench/run.py` + `bench/parallel.py`
 - [`ROADMAP.md`](ROADMAP.md) — phases through v1.x
 - Open issues: https://github.com/alinclaudiu/vaultmcp/issues
 
