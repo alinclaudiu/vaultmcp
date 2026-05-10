@@ -29,52 +29,28 @@ from ..shared.types import (
 )
 from .auth import AuthenticatedServer
 from .db import ConflictResult, Database, WriteResult
+from .errors import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ToolError,
+    ValidationFailed,
+)
 from .render import render_to_disk
+from .validation import DEFAULT_MAX_FILE_SIZE_BYTES, validate_write_content
 
-
-# =============================================================
-# Tool errors (translated to MCP error envelopes)
-# =============================================================
-
-
-class ToolError(Exception):
-    """Base class for tool-level errors with an HTTP-ish status code."""
-
-    status: int = 500
-
-    def __init__(self, message: str, *, status: int | None = None) -> None:
-        super().__init__(message)
-        if status is not None:
-            self.status = status
-
-
-class NotFoundError(ToolError):
-    status = 404
-
-
-class ConflictError(ToolError):
-    """Raised on optimistic-concurrency mismatch.
-
-    Carries the master's current state so the agent can resync.
-    """
-
-    status = 409
-
-    def __init__(self, conflict: WriteConflict) -> None:
-        super().__init__(f"Version conflict; current is {conflict.current_version}")
-        self.conflict = conflict
-
-
-class ValidationFailed(ToolError):
-    status = 422
-
-
-class ForbiddenError(ToolError):
-    """Raised when the authenticated server tries to act as a different one
-    or to write on behalf of an app it doesn't own.
-    """
-
-    status = 403
+__all__ = [
+    "ConflictError",
+    "ForbiddenError",
+    "NotFoundError",
+    "ToolError",
+    "ValidationFailed",
+    "call_handler_by_name",
+    "handle_append_log",
+    "handle_list",
+    "handle_read",
+    "handle_write",
+]
 
 
 def _enforce_session_matches_server(
@@ -131,14 +107,17 @@ async def handle_write(
     inp: WriteInput,
     *,
     authed: AuthenticatedServer | None = None,
+    max_bytes: int = DEFAULT_MAX_FILE_SIZE_BYTES,
 ) -> WriteOutput:
     _enforce_session_matches_server(inp.session.server_id, inp.session.app, authed)
 
-    # Parse frontmatter — minimal validation only at this phase.
-    try:
-        metadata, _body = fm_mod.parse(inp.content)
-    except fm_mod.FrontmatterError as exc:
-        raise ValidationFailed(f"Frontmatter invalid: {exc}") from exc
+    # Encoding / size / frontmatter / secret checks. Raises ValidationFailed
+    # (422) or SizeLimitExceeded (413).
+    validate_write_content(inp.content, max_bytes=max_bytes)
+
+    # Validation already parsed the frontmatter; do it once more here so
+    # the rest of the function keeps the same shape it had pre-validation.
+    metadata, _body = fm_mod.parse(inp.content)
 
     type_ = fm_mod.extract_type(metadata)
     owners = fm_mod.extract_owners(metadata)
@@ -245,6 +224,7 @@ async def call_handler_by_name(
     db: Database,
     wiki_dir: Path,
     authed: AuthenticatedServer | None = None,
+    max_bytes: int = DEFAULT_MAX_FILE_SIZE_BYTES,
 ) -> dict[str, Any]:
     """Dispatch a tool call by name. Returns a JSON-serializable dict.
 
@@ -259,7 +239,9 @@ async def call_handler_by_name(
         return (await handle_read(db, ReadInput(**args))).model_dump(mode="json")
     if name == "wiki.write":
         return (
-            await handle_write(db, wiki_dir, WriteInput(**args), authed=authed)
+            await handle_write(
+                db, wiki_dir, WriteInput(**args), authed=authed, max_bytes=max_bytes
+            )
         ).model_dump(mode="json")
     if name == "wiki.list":
         return (await handle_list(db, ListInput(**args))).model_dump(mode="json")

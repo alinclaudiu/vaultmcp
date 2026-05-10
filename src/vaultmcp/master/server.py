@@ -74,6 +74,7 @@ def build_app(config: MasterConfig) -> FastAPI:
         state["db"] = db
         state["broadcaster"] = broadcaster
         state["wiki_dir"] = config.wiki_dir
+        state["max_bytes"] = config.max_file_size_bytes
 
         try:
             yield
@@ -129,9 +130,15 @@ def build_app(config: MasterConfig) -> FastAPI:
     ) -> dict[str, Any]:
         db = _get_db(state)
         wiki_dir = _get_wiki_dir(state)
+        max_bytes = _get_max_bytes(state)
         try:
             return await call_handler_by_name(
-                req.tool, req.args, db=db, wiki_dir=wiki_dir, authed=authed
+                req.tool,
+                req.args,
+                db=db,
+                wiki_dir=wiki_dir,
+                authed=authed,
+                max_bytes=max_bytes,
             )
         except ConflictError as exc:
             raise HTTPException(
@@ -196,6 +203,13 @@ def _get_wiki_dir(state: dict[str, object]) -> Path:
     if not isinstance(wd, Path):
         raise RuntimeError("wiki_dir not initialized")
     return wd
+
+
+def _get_max_bytes(state: dict[str, object]) -> int:
+    n = state.get("max_bytes")
+    if not isinstance(n, int):
+        raise RuntimeError("max_bytes not initialized")
+    return n
 
 
 def _redact(dsn: str) -> str:
