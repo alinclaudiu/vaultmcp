@@ -1,6 +1,6 @@
 [project]
 name = "vaultmcp"
-version = "0.2.0.dev0"
+version = "0.2.1"
 description = "MCP-first knowledge mesh for AI agents — master + agent reference implementation."
 readme = "README.md"
 requires-python = ">=3.11"

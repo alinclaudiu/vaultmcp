@@ -82,7 +82,7 @@ def build_app(config: MasterConfig) -> FastAPI:
 
     app = FastAPI(
         title="VaultMCP master",
-        version="0.2.0.dev0",
+        version="0.2.1",
         lifespan=lifespan,
     )
 
