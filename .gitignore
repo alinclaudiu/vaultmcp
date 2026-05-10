@@ -37,8 +37,11 @@ venv/
 *.db
 *.sqlite
 *.sqlite3
-*.sql
 *.dump
+*.sql.gz
+# Note: we deliberately do NOT ignore *.sql — schema migrations and
+# fixtures live in the repo. Production dumps end with .sql.gz / .dump
+# (covered above) or should be kept entirely outside the repo.
 
 # Logs
 *.log
