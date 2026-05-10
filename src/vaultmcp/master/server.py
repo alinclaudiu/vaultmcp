@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
@@ -85,7 +85,7 @@ def build_app(config: MasterConfig) -> FastAPI:
         args: dict
 
     @app.post("/mcp/call")
-    async def call_tool(req: CallRequest, request: Request) -> dict:
+    async def call_tool(req: CallRequest = Body(...)) -> dict:
         db = _get_db(state)
         wiki_dir = _get_wiki_dir(state)
         try:
