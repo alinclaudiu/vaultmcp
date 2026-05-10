@@ -15,29 +15,19 @@ once the basic flow is green.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 pytestmark = pytest.mark.e2e
 
 
-@pytest.fixture
-def database_url() -> str:
-    url = os.environ.get("VAULTMCP_TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("VAULTMCP_TEST_DATABASE_URL not set; skipping e2e")
-    return url
-
-
 @pytest.mark.asyncio
-async def test_write_then_read(database_url: str, tmp_path) -> None:
+async def test_write_then_read(clean_database: str, tmp_path) -> None:
     from vaultmcp.master.config import MasterConfig
     from vaultmcp.master.db import Database
     from vaultmcp.master.tools import handle_read, handle_write
     from vaultmcp.shared.types import ReadInput, Session, WriteInput
 
-    config = MasterConfig(database_url=database_url, wiki_dir=tmp_path / "wiki")
+    config = MasterConfig(database_url=clean_database, wiki_dir=tmp_path / "wiki")
     config.wiki_dir.mkdir(parents=True, exist_ok=True)
 
     db = await Database.connect(config.database_url)
