@@ -70,6 +70,20 @@ def migrate() -> None:
     asyncio.run(run())
 
 
+@cli.command(name="mcp-stdio")
+def mcp_stdio_cmd() -> None:
+    """Speak the official MCP protocol over stdin/stdout.
+
+    Spawn this command from any MCP-aware client (Claude Desktop, an
+    IDE plugin, …) to expose the master's wiki tools natively. Unlike
+    ``serve``, this doesn't open an HTTP listener — it talks JSON-RPC
+    framed by the MCP SDK directly on the inherited stdio.
+    """
+    from .mcp_adapter import serve_stdio
+
+    asyncio.run(serve_stdio())
+
+
 @cli.command(name="render-all")
 @click.option(
     "--prefix",
