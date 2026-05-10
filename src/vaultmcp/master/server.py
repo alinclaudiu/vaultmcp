@@ -31,6 +31,7 @@ from .auth import AuthenticatedServer, hash_token, parse_bearer
 from .config import MasterConfig
 from .dashboard import build_router as build_dashboard_router
 from .db import Database
+from .embeddings import EmbeddingWorker, get_provider
 from .ownership import OwnershipRules, load_rules
 from .sse import EventBroadcaster, format_sse
 from .tools import ConflictError, ToolError, call_handler_by_name
@@ -77,6 +78,20 @@ def build_app(config: MasterConfig) -> FastAPI:
         if len(ownership) > 0:
             LOG.info("Loaded %d ownership rule(s)", len(ownership))
 
+        embedding_worker: EmbeddingWorker | None = None
+        if config.embedding_provider:
+            try:
+                provider = get_provider(config.embedding_provider)
+            except KeyError:
+                LOG.error(
+                    "Unknown embedding provider %r; worker disabled",
+                    config.embedding_provider,
+                )
+            else:
+                embedding_worker = EmbeddingWorker(db=db, provider=provider)
+                await embedding_worker.start()
+                LOG.info("Embedding worker started (provider=%s)", provider.name)
+
         state["db"] = db
         state["broadcaster"] = broadcaster
         state["wiki_dir"] = config.wiki_dir
@@ -86,6 +101,8 @@ def build_app(config: MasterConfig) -> FastAPI:
         try:
             yield
         finally:
+            if embedding_worker is not None:
+                await embedding_worker.stop()
             await broadcaster.stop()
             await db.close()
 

@@ -321,6 +321,20 @@ class Database:
                     {"version": new_version},
                 )
 
+                # Queue an embedding job for this page version. Idempotent
+                # via the (path, version) unique key — if the worker is
+                # behind and the same page is written twice in quick
+                # succession, only one job per (path, version) survives.
+                await conn.execute(
+                    """
+                    INSERT INTO embedding_jobs (path, version)
+                    VALUES ($1, $2)
+                    ON CONFLICT (path, version) DO NOTHING
+                    """,
+                    path,
+                    new_version,
+                )
+
                 await self._insert_audit(
                     conn,
                     operation="write",
@@ -482,6 +496,91 @@ class Database:
             error_code,
             client_ip,
         )
+
+    # ---------- embeddings (worker side) ----------
+
+    async def pop_pending_embedding_job(
+        self, *, max_attempts: int = 5
+    ) -> tuple[int, str, int, str] | None:
+        """Atomically claim the oldest pending embedding job.
+
+        Bumps the row's ``attempts`` by 1 (so a failure to embed
+        eventually retires the job after ``max_attempts``) and joins
+        in the page's current content. Returns ``None`` when no jobs
+        are pending. Uses ``FOR UPDATE SKIP LOCKED`` so multiple
+        workers (a future scale-out) wouldn't fight over the same row.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    WITH next_job AS (
+                        SELECT id FROM embedding_jobs
+                        WHERE attempts < $1
+                        ORDER BY enqueued_at ASC, id ASC
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT 1
+                    )
+                    UPDATE embedding_jobs ej
+                    SET attempts = ej.attempts + 1
+                    FROM next_job
+                    WHERE ej.id = next_job.id
+                    RETURNING ej.id, ej.path, ej.version
+                    """,
+                    max_attempts,
+                )
+                if row is None:
+                    return None
+                page = await conn.fetchrow(
+                    "SELECT content FROM pages WHERE path = $1", row["path"]
+                )
+                content = page["content"] if page is not None else ""
+                return row["id"], row["path"], row["version"], content
+
+    async def complete_embedding_job(
+        self,
+        *,
+        job_id: int,
+        path: str,
+        version: int,
+        model: str,
+        dim: int,
+        vector: list[float],
+    ) -> None:
+        """Upsert the embedding and remove the job in one transaction."""
+        # pgvector accepts a string literal cast to vector — saves us
+        # adding the pgvector Python package as a runtime dep just to
+        # register the asyncpg codec.
+        vec_literal = "[" + ",".join(f"{x:.7f}" for x in vector) + "]"
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO embeddings (path, version, model, dim, embedding, computed_at)
+                    VALUES ($1, $2, $3, $4, $5::vector, NOW())
+                    ON CONFLICT (path) DO UPDATE SET
+                        version = EXCLUDED.version,
+                        model = EXCLUDED.model,
+                        dim = EXCLUDED.dim,
+                        embedding = EXCLUDED.embedding,
+                        computed_at = EXCLUDED.computed_at
+                    """,
+                    path,
+                    version,
+                    model,
+                    dim,
+                    vec_literal,
+                )
+                await conn.execute("DELETE FROM embedding_jobs WHERE id = $1", job_id)
+
+    async def fail_embedding_job(self, *, job_id: int, error: str) -> None:
+        """Record an error on a job so the dashboard surfaces it; attempts already bumped."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE embedding_jobs SET last_error = $1 WHERE id = $2",
+                error,
+                job_id,
+            )
 
     # ---------- search ----------
 

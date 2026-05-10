@@ -46,7 +46,17 @@ to master, and any other agent's writes will appear in your local mirror.
 
 ## Production install (sketch)
 
-1. Provision a master host with Postgres 15+ accessible.
+1. Provision a master host with Postgres 15+ accessible. Install the
+   pgvector extension package (e.g.
+   `apt install postgresql-17-pgvector` on Debian/Ubuntu), then enable
+   it on the VaultMCP database **once** as a superuser:
+   ```bash
+   sudo -u postgres psql -d vaultmcp -c "CREATE EXTENSION vector;"
+   ```
+   The schema migration (`vaultmcp-master migrate`) runs as the
+   non-superuser `vaultmcp` role and only re-asserts the extension via
+   `CREATE EXTENSION IF NOT EXISTS`, which is a no-op once the
+   superuser step above has happened.
 2. Install Python 3.11 and the VaultMCP package (`pip install vaultmcp`
    once published, or `pip install /path/to/vaultmcp` from this repo).
 3. Create the `vaultmcp` system user. Create `/srv/vaultmcp/wiki`

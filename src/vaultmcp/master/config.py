@@ -39,6 +39,12 @@ class MasterConfig:
     dashboard_username: str = "admin"
     dashboard_password: str | None = None
 
+    # Embedding provider name (e.g. "null/sha-1536"). When None, the
+    # worker doesn't run; embedding_jobs accumulate harmlessly until
+    # an embedder is configured. See vaultmcp.master.embeddings for
+    # the registry of provider names.
+    embedding_provider: str | None = None
+
     # Optional path to the ownership/policy YAML config. None means
     # ``/srv/vaultmcp/config.yaml`` if it exists, else no path-level
     # rules are enforced.
@@ -79,4 +85,5 @@ class MasterConfig:
             ),
             dashboard_username=os.environ.get("VAULTMCP_DASHBOARD_USERNAME", "admin"),
             dashboard_password=os.environ.get("VAULTMCP_DASHBOARD_PASSWORD") or None,
+            embedding_provider=os.environ.get("VAULTMCP_EMBEDDING_PROVIDER") or None,
         )

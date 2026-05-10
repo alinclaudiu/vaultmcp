@@ -174,3 +174,51 @@ ALTER TABLE pages
 
 CREATE INDEX IF NOT EXISTS pages_content_tsv_idx
     ON pages USING GIN (content_tsv);
+
+-- =============================================================
+-- Vector search (pgvector)
+--
+-- One row per page in `embeddings`; the worker keeps it in sync via the
+-- `embedding_jobs` queue. Dimension is fixed per deployment (OpenAI
+-- text-embedding-3-small = 1536 by default; the dim column lets us
+-- migrate to a different model without dropping the table outright).
+-- =============================================================
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS embeddings (
+    path           TEXT PRIMARY KEY REFERENCES pages(path) ON DELETE CASCADE,
+    version        BIGINT NOT NULL,             -- the page version this embedding reflects
+    model          TEXT NOT NULL,               -- e.g. "openai/text-embedding-3-small"
+    dim            INT NOT NULL,                -- vector dimension; must match column type
+    embedding      vector(1536) NOT NULL,
+    computed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- HNSW index for cosine distance — works for both inner-product and
+-- cosine queries. ivfflat is the alternative when row count > 1M.
+CREATE INDEX IF NOT EXISTS embeddings_embedding_cos_idx
+    ON embeddings USING hnsw (embedding vector_cosine_ops);
+
+-- =============================================================
+-- Embedding jobs queue
+--
+-- Master enqueues a row whenever a page is written; the worker pops the
+-- oldest pending row, computes an embedding, upserts into `embeddings`,
+-- and deletes the job. Inserts are idempotent on (path, version) — if
+-- the worker is offline and the master writes the same page twice,
+-- only one job survives.
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS embedding_jobs (
+    id             BIGSERIAL PRIMARY KEY,
+    path           TEXT NOT NULL,
+    version        BIGINT NOT NULL,
+    enqueued_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    attempts       INT NOT NULL DEFAULT 0,
+    last_error     TEXT,
+    UNIQUE (path, version)
+);
+
+CREATE INDEX IF NOT EXISTS embedding_jobs_pending_idx
+    ON embedding_jobs (enqueued_at) WHERE attempts < 5;
