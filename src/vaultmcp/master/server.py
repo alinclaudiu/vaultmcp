@@ -17,15 +17,15 @@ is tracked in a follow-up issue.
 
 from __future__ import annotations
 
-import json
 import logging
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .config import MasterConfig
 from .db import Database
@@ -36,7 +36,21 @@ LOG = logging.getLogger("vaultmcp.master")
 
 
 # =============================================================
-# Lifespan: open DB, apply schema, start broadcaster
+# Request models (module-scope so FastAPI/Pydantic resolve them cleanly)
+# =============================================================
+
+
+class CallRequest(BaseModel):
+    """Body of ``POST /mcp/call`` — the JSON-over-HTTP tool dispatch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool: str
+    args: dict[str, Any] = {}
+
+
+# =============================================================
+# App factory
 # =============================================================
 
 
@@ -80,12 +94,8 @@ def build_app(config: MasterConfig) -> FastAPI:
 
     # ---------- /mcp/call ----------
 
-    class CallRequest(BaseModel):
-        tool: str
-        args: dict
-
     @app.post("/mcp/call")
-    async def call_tool(req: CallRequest = Body(...)) -> dict:
+    async def call_tool(req: CallRequest = Body(...)) -> dict[str, Any]:
         db = _get_db(state)
         wiki_dir = _get_wiki_dir(state)
         try:
@@ -135,21 +145,21 @@ def build_app(config: MasterConfig) -> FastAPI:
 # =============================================================
 
 
-def _get_db(state: dict) -> Database:
+def _get_db(state: dict[str, object]) -> Database:
     db = state.get("db")
     if not isinstance(db, Database):
         raise RuntimeError("DB not initialized")
     return db
 
 
-def _get_broadcaster(state: dict) -> EventBroadcaster:
+def _get_broadcaster(state: dict[str, object]) -> EventBroadcaster:
     b = state.get("broadcaster")
     if not isinstance(b, EventBroadcaster):
         raise RuntimeError("Broadcaster not initialized")
     return b
 
 
-def _get_wiki_dir(state: dict) -> Path:
+def _get_wiki_dir(state: dict[str, object]) -> Path:
     wd = state.get("wiki_dir")
     if not isinstance(wd, Path):
         raise RuntimeError("wiki_dir not initialized")
