@@ -2,6 +2,40 @@
 
 All notable changes to VaultMCP are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] — 2026-05-10
+
+**MCP-native release.** Closes the "MCP-first project that doesn't
+fully speak MCP" gap that's been carried in the README and DESIGN.md
+since v0.2. All other changes are documentation alignment + a code
+cleanup pass.
+
+### Added
+
+- **`/mcp/streamable` HTTP endpoint** — official MCP-over-HTTP via
+  the `mcp` SDK's `StreamableHTTPSessionManager`. Off-the-shelf MCP
+  clients (Claude Desktop, IDE plugins, MCP HTTP clients) can dial
+  it directly without spawning a subprocess. Stateless, JSON
+  responses, mounted as a raw ASGI route alongside the legacy
+  `/mcp/call` shim. Same six `wiki.*` tools as the stdio transport.
+
+### Changed
+
+- **`ruff check src tests` is now fully green.** 26 pre-existing
+  warnings cleared (`UP037`, `UP017`, `UP035`, `I001`, `F401`,
+  `E402`, `N812` auto-fixed). FastAPI's `Depends(...)` /
+  `Body(...)` argument-default idiom and the broadcaster's
+  fire-and-forget `asyncio.create_task` calls are pinned via
+  `[tool.ruff.lint.per-file-ignores]` rather than scattered
+  `# noqa` comments.
+- **README** — new "Wiring an MCP-aware client" section under
+  Quick start with a concrete Claude Desktop config snippet.
+- **CLAUDE.md** rewritten to reflect v0.6.1+ reality (was still
+  saying "v0.2 skeleton"). New "What's already in" section so a
+  fresh Claude Code session in the repo doesn't try to rebuild
+  what already shipped.
+- **ROADMAP.md** — every checkbox under v0.1 → v0.6 is now [x],
+  with the concrete deliverables enumerated.
+
 ## [0.6.1] — 2026-05-10
 
 Polish + first-deploy fixes on top of v0.6.0. No breaking changes.
