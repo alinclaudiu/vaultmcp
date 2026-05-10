@@ -240,6 +240,100 @@ class AuditOutput(BaseModel):
 
 
 # =============================================================
+# ext.* (extensions) — per docs/03-extensibility.md
+# =============================================================
+
+
+# Whitelist of column types extensions are allowed to declare. Avoids
+# arbitrary SQL injection through type strings, and keeps cross-app
+# schema simple. Add to this set deliberately as needs surface.
+EXT_COLUMN_TYPES: tuple[str, ...] = (
+    "text",
+    "int",
+    "bigint",
+    "smallint",
+    "boolean",
+    "uuid",
+    "timestamptz",
+    "date",
+    "jsonb",
+    "numeric",
+    "real",
+    "double precision",
+)
+
+
+class ExtColumnSpec(BaseModel):
+    """One column in an extension table. Modeled after the API in
+    docs/03-extensibility.md.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9_]*$")
+    type: str = Field(...)
+    primary_key: bool = False
+    not_null: bool = False
+    default: str | None = None  # raw SQL expression (e.g. "NOW()", "'pending'")
+    references: str | None = None  # raw "<table>(<col>)" — soft-checked
+
+
+class ExtPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    can_read_pages: bool = False
+    can_read_audit: bool = False
+    can_use_embeddings: bool = False
+    can_subscribe_events: bool = False
+
+
+class ExtRegisterInput(BaseModel):
+    name: str = Field(..., min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9_]*$")
+    schema_prefix: str | None = None  # default: "ext_<name>_"
+    owners: list[str] = Field(default_factory=list)
+    policy: ExtPolicy = Field(default_factory=ExtPolicy)
+
+
+class ExtRegisterOutput(BaseModel):
+    name: str
+    schema_prefix: str
+    schema_version: int
+    created_at: datetime
+
+
+class ExtListOutput(BaseModel):
+    extensions: list[ExtRegisterOutput]
+
+
+class ExtDeclareTableInput(BaseModel):
+    extension: str = Field(..., min_length=1)
+    name: str = Field(
+        ..., min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9_]*$"
+    )
+    columns: list[ExtColumnSpec] = Field(..., min_length=1)
+
+
+class ExtDeclareTableOutput(BaseModel):
+    extension: str
+    full_table_name: str   # e.g. "ext_crm_contacts"
+    column_count: int
+
+
+class ExtQueryInput(BaseModel):
+    extension: str = Field(..., min_length=1)
+    sql: str = Field(..., min_length=1)
+    params: list[Any] = Field(default_factory=list)
+    limit: int = Field(default=500, ge=1, le=5000)
+
+
+class ExtQueryOutput(BaseModel):
+    columns: list[str]
+    rows: list[list[Any]]
+    row_count: int
+    truncated: bool
+
+
+# =============================================================
 # wiki.subscribe (SSE streaming)
 # =============================================================
 

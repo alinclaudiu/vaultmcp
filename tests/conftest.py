@@ -39,7 +39,7 @@ async def clean_database(database_url: str) -> AsyncIterator[str]:
     privileges the test role doesn't have. Dropping the master's tables
     explicitly leaves the extension intact.
     """
-    tables = (
+    core_tables = (
         "embedding_jobs",
         "embeddings",
         "audit",
@@ -48,10 +48,23 @@ async def clean_database(database_url: str) -> AsyncIterator[str]:
         "log_entries",
         "pages",
         "servers",
+        "extensions",
     )
     conn = await asyncpg.connect(database_url)
     try:
-        for tbl in tables:
+        # Extension tables (ext_<name>_*) are created at runtime by
+        # ext.declare_table. Discover and drop them before the core
+        # tables so subsequent runs see a truly empty schema.
+        ext_tables = [
+            r["tablename"]
+            for r in await conn.fetch(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname = 'public' AND tablename LIKE 'ext_%'"
+            )
+        ]
+        for tbl in ext_tables:
+            await conn.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
+        for tbl in core_tables:
             await conn.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
         await conn.execute("DROP SEQUENCE IF EXISTS global_version_seq CASCADE")
     finally:

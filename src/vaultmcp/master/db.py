@@ -761,6 +761,106 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetch(sql, *params)
 
+    # ---------- extensions ----------
+
+    async def ext_register(
+        self,
+        *,
+        name: str,
+        schema_prefix: str,
+        owners: list[str],
+        policy: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Insert a new extension. Returns the created row, or None if name taken."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO extensions (name, schema_prefix, owners, policy)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (name) DO NOTHING
+                RETURNING name, schema_prefix, owners, policy, schema_version, created_at
+                """,
+                name,
+                schema_prefix,
+                owners,
+                policy,
+            )
+        if row is None:
+            return None
+        return {
+            "name": row["name"],
+            "schema_prefix": row["schema_prefix"],
+            "owners": list(row["owners"] or []),
+            "policy": row["policy"] or {},
+            "schema_version": row["schema_version"],
+            "created_at": row["created_at"],
+        }
+
+    async def ext_get(self, name: str) -> dict[str, Any] | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT name, schema_prefix, owners, policy, schema_version, "
+                "created_at FROM extensions WHERE name = $1",
+                name,
+            )
+        if row is None:
+            return None
+        return {
+            "name": row["name"],
+            "schema_prefix": row["schema_prefix"],
+            "owners": list(row["owners"] or []),
+            "policy": row["policy"] or {},
+            "schema_version": row["schema_version"],
+            "created_at": row["created_at"],
+        }
+
+    async def ext_list(self) -> list[dict[str, Any]]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT name, schema_prefix, owners, policy, schema_version, "
+                "created_at FROM extensions ORDER BY name"
+            )
+        return [
+            {
+                "name": r["name"],
+                "schema_prefix": r["schema_prefix"],
+                "owners": list(r["owners"] or []),
+                "policy": r["policy"] or {},
+                "schema_version": r["schema_version"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    async def ext_create_table(self, *, sql: str) -> None:
+        """Run a pre-validated CREATE TABLE produced by build_create_table_sql.
+
+        Caller is responsible for assembling the SQL via the helper —
+        this method does no extra validation, it just executes.
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute(sql)
+
+    async def ext_query(
+        self, *, sql: str, params: list[Any], limit: int
+    ) -> tuple[list[str], list[list[Any]], bool]:
+        """Run a SELECT in a READ ONLY transaction; cap at ``limit`` rows.
+
+        Returns ``(columns, rows, truncated)``. ``rows`` are
+        positional lists in the order of ``columns``. Postgres
+        ``READ ONLY`` rejects any DDL/DML, so even if the lexical
+        check at the tools layer is bypassed, the DB itself refuses.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction(readonly=True):
+                # Pull one extra so the truncated flag is accurate when
+                # the underlying query already applies a LIMIT.
+                rows = await conn.fetch(sql, *params)
+        truncated = len(rows) > limit
+        out_rows = [list(r.values()) for r in rows[:limit]]
+        cols: list[str] = list(rows[0].keys()) if rows else []
+        return cols, out_rows, truncated
+
     # ---------- servers (auth) ----------
 
     async def add_server(

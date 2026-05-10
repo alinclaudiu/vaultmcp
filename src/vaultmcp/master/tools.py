@@ -19,6 +19,13 @@ from ..shared.types import (
     AuditEntry,
     AuditInput,
     AuditOutput,
+    ExtDeclareTableInput,
+    ExtDeclareTableOutput,
+    ExtListOutput,
+    ExtQueryInput,
+    ExtQueryOutput,
+    ExtRegisterInput,
+    ExtRegisterOutput,
     ListEntry,
     ListInput,
     ListOutput,
@@ -44,6 +51,12 @@ from .errors import (
     ToolError,
     ValidationFailed,
 )
+from .extensions import (
+    assert_query_is_readonly,
+    assert_valid_extension_name,
+    build_create_table_sql,
+    default_schema_prefix,
+)
 from .ownership import OwnershipRules
 from .render import render_to_disk
 from .validation import DEFAULT_MAX_FILE_SIZE_BYTES, validate_write_content
@@ -57,6 +70,10 @@ __all__ = [
     "call_handler_by_name",
     "handle_append_log",
     "handle_audit",
+    "handle_ext_declare_table",
+    "handle_ext_list",
+    "handle_ext_query",
+    "handle_ext_register",
     "handle_list",
     "handle_read",
     "handle_search",
@@ -318,6 +335,84 @@ def _reciprocal_rank_fusion(
     return out
 
 
+async def handle_ext_register(
+    db: Database, inp: ExtRegisterInput
+) -> ExtRegisterOutput:
+    assert_valid_extension_name(inp.name)
+    schema_prefix = inp.schema_prefix or default_schema_prefix(inp.name)
+    if not schema_prefix.endswith("_"):
+        raise ValidationFailed(
+            f"schema_prefix must end with '_'; got {schema_prefix!r}"
+        )
+    if not schema_prefix.startswith("ext_"):
+        raise ValidationFailed(
+            f"schema_prefix must start with 'ext_'; got {schema_prefix!r}"
+        )
+    row = await db.ext_register(
+        name=inp.name,
+        schema_prefix=schema_prefix,
+        owners=inp.owners,
+        policy=inp.policy.model_dump(),
+    )
+    if row is None:
+        raise ValidationFailed(f"Extension {inp.name!r} is already registered")
+    return ExtRegisterOutput(
+        name=row["name"],
+        schema_prefix=row["schema_prefix"],
+        schema_version=row["schema_version"],
+        created_at=row["created_at"],
+    )
+
+
+async def handle_ext_list(db: Database) -> ExtListOutput:
+    rows = await db.ext_list()
+    return ExtListOutput(
+        extensions=[
+            ExtRegisterOutput(
+                name=r["name"],
+                schema_prefix=r["schema_prefix"],
+                schema_version=r["schema_version"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+    )
+
+
+async def handle_ext_declare_table(
+    db: Database, inp: ExtDeclareTableInput
+) -> ExtDeclareTableOutput:
+    ext = await db.ext_get(inp.extension)
+    if ext is None:
+        raise NotFoundError(
+            f"Extension {inp.extension!r} not registered. Call ext.register first."
+        )
+    sql, full_name = build_create_table_sql(
+        schema_prefix=ext["schema_prefix"],
+        table_name=inp.name,
+        columns=inp.columns,
+    )
+    await db.ext_create_table(sql=sql)
+    return ExtDeclareTableOutput(
+        extension=inp.extension,
+        full_table_name=full_name,
+        column_count=len(inp.columns),
+    )
+
+
+async def handle_ext_query(db: Database, inp: ExtQueryInput) -> ExtQueryOutput:
+    ext = await db.ext_get(inp.extension)
+    if ext is None:
+        raise NotFoundError(f"Extension {inp.extension!r} not registered")
+    assert_query_is_readonly(inp.sql)
+    cols, rows, truncated = await db.ext_query(
+        sql=inp.sql, params=inp.params, limit=inp.limit
+    )
+    return ExtQueryOutput(
+        columns=cols, rows=rows, row_count=len(rows), truncated=truncated
+    )
+
+
 async def handle_audit(db: Database, inp: AuditInput) -> AuditOutput:
     rows = await db.list_audit(
         path=inp.path,
@@ -416,6 +511,22 @@ async def call_handler_by_name(
     if name == "wiki.search":
         return (
             await handle_search(db, SearchInput(**args), embedder=embedder)
+        ).model_dump(mode="json")
+
+    # ---- ext.* ----
+    if name == "ext.register":
+        return (
+            await handle_ext_register(db, ExtRegisterInput(**args))
+        ).model_dump(mode="json")
+    if name == "ext.list":
+        return (await handle_ext_list(db)).model_dump(mode="json")
+    if name == "ext.declare_table":
+        return (
+            await handle_ext_declare_table(db, ExtDeclareTableInput(**args))
+        ).model_dump(mode="json")
+    if name == "ext.query":
+        return (
+            await handle_ext_query(db, ExtQueryInput(**args))
         ).model_dump(mode="json")
 
     raise ToolError(f"Unknown tool: {name}", status=400)

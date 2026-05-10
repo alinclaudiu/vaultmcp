@@ -156,6 +156,27 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE INDEX IF NOT EXISTS subscriptions_server_idx ON subscriptions(server_id);
 
 -- =============================================================
+-- Extensions (per docs/03-extensibility.md)
+--
+-- An extension is another application that owns tables under a
+-- reserved schema prefix (e.g. `ext_crm_*`) and reads from core
+-- tables according to its policy. Master enforces the prefix at the
+-- application layer; full Postgres-role isolation lands in v0.6.
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS extensions (
+    name           TEXT PRIMARY KEY,                     -- "crm", "incident_tracker"
+    schema_prefix  TEXT NOT NULL UNIQUE,                 -- "ext_crm_", "ext_incident_"
+    owners         TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    policy         JSONB NOT NULL DEFAULT '{}'::jsonb,   -- {can_read_pages, can_read_audit, ...}
+    schema_version INT NOT NULL DEFAULT 1,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS extensions_owners_idx
+    ON extensions USING GIN (owners);
+
+-- =============================================================
 -- Full-text search (lexical)
 --
 -- A generated tsvector column on `pages` enables `wiki.search` over
