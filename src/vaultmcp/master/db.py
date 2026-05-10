@@ -897,6 +897,88 @@ class Database:
             for r in rows
         ]
 
+    async def ext_deregister(
+        self, *, name: str, schema_prefix: str, role_name: str
+    ) -> dict[str, Any]:
+        """Tear down an extension. Reverse of ext_register.
+
+        Order matters:
+        1. Re-grant the role to CURRENT_USER (defensive — the original
+           ``GRANT … TO CURRENT_USER`` from registration may have been
+           revoked, and DROP OWNED needs membership privileges).
+        2. DELETE pages where path matches the ``ext/<name>/`` namespace
+           — cascades to ``embeddings`` + ``embedding_jobs`` via FK.
+        3. DROP every ``<schema_prefix>*`` table.
+        4. DROP OWNED + DROP ROLE.
+        5. DELETE extensions row.
+
+        Returns a small report so the operator sees what got cleaned.
+        """
+        report = {
+            "name": name,
+            "tables_dropped": 0,
+            "pages_dropped": 0,
+            "role_dropped": False,
+        }
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # If the extensions row is already gone, treat as no-op.
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM extensions WHERE name = $1", name
+                )
+                if not exists:
+                    return report
+
+                # 1. Make sure we can DROP OWNED.
+                role_exists = await conn.fetchval(
+                    "SELECT 1 FROM pg_roles WHERE rolname = $1", role_name
+                )
+                if role_exists:
+                    try:
+                        await conn.execute(f"GRANT {role_name} TO CURRENT_USER")
+                    except Exception:
+                        pass
+
+                # 2. Drop pages in the ext namespace; FK cascades.
+                deleted = await conn.fetchval(
+                    "WITH d AS ("
+                    "  DELETE FROM pages WHERE path LIKE $1 RETURNING 1"
+                    ") SELECT count(*) FROM d",
+                    f"ext/{name}/%",
+                )
+                report["pages_dropped"] = int(deleted or 0)
+
+                # 3. Drop ext_<name>_* tables.
+                ext_tables = [
+                    r["tablename"]
+                    for r in await conn.fetch(
+                        "SELECT tablename FROM pg_tables "
+                        "WHERE schemaname = 'public' AND tablename LIKE $1",
+                        f"{schema_prefix}%",
+                    )
+                ]
+                for tbl in ext_tables:
+                    await conn.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
+                report["tables_dropped"] = len(ext_tables)
+
+                # 4. DROP role if present.
+                if role_exists:
+                    try:
+                        await conn.execute(f"DROP OWNED BY {role_name}")
+                    except Exception:
+                        # Worst case the role keeps a few leftover ACLs;
+                        # DROP ROLE will tell us below.
+                        pass
+                    try:
+                        await conn.execute(f"DROP ROLE IF EXISTS {role_name}")
+                        report["role_dropped"] = True
+                    except Exception:
+                        report["role_dropped"] = False
+
+                # 5. Remove the extensions row.
+                await conn.execute("DELETE FROM extensions WHERE name = $1", name)
+        return report
+
     async def ext_create_table(
         self, *, sql: str, full_table_name: str, role_name: str
     ) -> None:

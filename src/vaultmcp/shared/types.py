@@ -388,6 +388,25 @@ class ExtEmitEventOutput(BaseModel):
     global_version: int
 
 
+class ExtDeregisterInput(BaseModel):
+    """``ext.deregister`` removes an extension and everything it owns.
+
+    DESTRUCTIVE. Drops every ``ext_<name>_*`` table, every embedding
+    indexed under the ``ext/<name>/...`` path namespace, the
+    extension's Postgres role, and the extensions row itself.
+    Idempotent: re-running on an already-removed extension is a no-op.
+    """
+
+    name: str = Field(..., min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9_]*$")
+
+
+class ExtDeregisterOutput(BaseModel):
+    name: str
+    tables_dropped: int
+    pages_dropped: int
+    role_dropped: bool
+
+
 # =============================================================
 # wiki.subscribe (SSE streaming)
 # =============================================================

@@ -510,6 +510,114 @@ async def test_ext_emit_event_appears_in_events_feed(
 
 
 @pytest.mark.asyncio
+async def test_ext_deregister_drops_tables_role_and_pages(
+    clean_database: str, tmp_path: Path
+) -> None:
+    """Round-trip: register → declare table → embed → deregister →
+    nothing left. Re-register under the same name then succeeds."""
+    import asyncpg as _ap
+    from vaultmcp.master.config import MasterConfig
+    from vaultmcp.master.db import Database
+    from vaultmcp.master.tools import call_handler_by_name
+
+    config = MasterConfig(database_url=clean_database, wiki_dir=tmp_path / "wiki")
+    config.wiki_dir.mkdir()
+    db = await Database.connect(config.database_url)
+    try:
+        await db.apply_schema(config.schema_sql_path)
+
+        await call_handler_by_name(
+            "ext.register",
+            {"name": "crm", "policy": {"can_use_embeddings": True}},
+            db=db,
+            wiki_dir=config.wiki_dir,
+        )
+        await call_handler_by_name(
+            "ext.declare_table",
+            {
+                "extension": "crm",
+                "name": "contacts",
+                "columns": [
+                    {"name": "id", "type": "uuid", "primary_key": True},
+                    {"name": "name", "type": "text"},
+                ],
+            },
+            db=db,
+            wiki_dir=config.wiki_dir,
+        )
+        # Index a piece of ext content (creates a synthetic page +
+        # embedding_jobs row).
+        await call_handler_by_name(
+            "ext.embed",
+            {"extension": "crm", "rel_path": "contacts/123", "content": "hello"},
+            db=db,
+            wiki_dir=config.wiki_dir,
+        )
+
+        # Pre-deregister state.
+        conn = await _ap.connect(clean_database)
+        try:
+            assert await conn.fetchval(
+                "SELECT 1 FROM extensions WHERE name='crm'"
+            )
+            assert await conn.fetchval(
+                "SELECT 1 FROM pg_tables WHERE tablename='ext_crm_contacts'"
+            )
+            assert await conn.fetchval(
+                "SELECT 1 FROM pg_roles WHERE rolname='vaultmcp_ext_crm'"
+            )
+            page_count = await conn.fetchval(
+                "SELECT count(*) FROM pages WHERE path LIKE 'ext/crm/%'"
+            )
+            assert page_count == 1
+        finally:
+            await conn.close()
+
+        # Deregister.
+        out = await call_handler_by_name(
+            "ext.deregister", {"name": "crm"}, db=db, wiki_dir=config.wiki_dir
+        )
+        assert out["tables_dropped"] == 1
+        assert out["pages_dropped"] == 1
+        assert out["role_dropped"] is True
+
+        # Post-deregister: nothing left in catalog.
+        conn = await _ap.connect(clean_database)
+        try:
+            assert not await conn.fetchval(
+                "SELECT 1 FROM extensions WHERE name='crm'"
+            )
+            assert not await conn.fetchval(
+                "SELECT 1 FROM pg_tables WHERE tablename='ext_crm_contacts'"
+            )
+            assert not await conn.fetchval(
+                "SELECT 1 FROM pg_roles WHERE rolname='vaultmcp_ext_crm'"
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM pages WHERE path LIKE 'ext/crm/%'"
+                )
+                == 0
+            )
+        finally:
+            await conn.close()
+
+        # Idempotent.
+        out2 = await call_handler_by_name(
+            "ext.deregister", {"name": "crm"}, db=db, wiki_dir=config.wiki_dir
+        )
+        assert out2["tables_dropped"] == 0
+        assert out2["pages_dropped"] == 0
+
+        # Re-registering the same name now works (clean slate).
+        await call_handler_by_name(
+            "ext.register", {"name": "crm"}, db=db, wiki_dir=config.wiki_dir
+        )
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_extension_register_rejects_bad_prefix(
     clean_database: str, tmp_path: Path
 ) -> None:

@@ -21,6 +21,8 @@ from ..shared.types import (
     AuditOutput,
     ExtDeclareTableInput,
     ExtDeclareTableOutput,
+    ExtDeregisterInput,
+    ExtDeregisterOutput,
     ExtEmbedInput,
     ExtEmbedOutput,
     ExtEmitEventInput,
@@ -460,6 +462,23 @@ async def handle_ext_embed(db: Database, inp: ExtEmbedInput) -> ExtEmbedOutput:
     return ExtEmbedOutput(path=full_path, queued=queued)
 
 
+async def handle_ext_deregister(
+    db: Database, inp: ExtDeregisterInput
+) -> ExtDeregisterOutput:
+    ext = await db.ext_get(inp.name)
+    if ext is None:
+        # Idempotent — return zeroed report.
+        return ExtDeregisterOutput(
+            name=inp.name, tables_dropped=0, pages_dropped=0, role_dropped=False
+        )
+    report = await db.ext_deregister(
+        name=inp.name,
+        schema_prefix=ext["schema_prefix"],
+        role_name=ext["role_name"],
+    )
+    return ExtDeregisterOutput(**report)
+
+
 async def handle_ext_emit_event(
     db: Database, inp: ExtEmitEventInput
 ) -> ExtEmitEventOutput:
@@ -604,6 +623,10 @@ async def call_handler_by_name(
     if name == "ext.emit_event":
         return (
             await handle_ext_emit_event(db, ExtEmitEventInput(**args))
+        ).model_dump(mode="json")
+    if name == "ext.deregister":
+        return (
+            await handle_ext_deregister(db, ExtDeregisterInput(**args))
         ).model_dump(mode="json")
 
     raise ToolError(f"Unknown tool: {name}", status=400)
