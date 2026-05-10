@@ -1,0 +1,32 @@
+%% Extensibility — DB shared between VaultMCP core and external apps (OB1-inspired)
+
+flowchart TB
+    subgraph master["Master Postgres database"]
+        subgraph core["VaultMCP core (read-only for extensions)"]
+            P[pages]
+            E[embeddings — shared!]
+            A[audit]
+            EV[events]
+            SUB[subscriptions]
+            SRV[servers]
+        end
+
+        subgraph ext1["ext_crm_*"]
+            C[ext_crm_contacts]
+            O[ext_crm_opportunities]
+        end
+
+        subgraph ext2["ext_meal_*"]
+            R[ext_meal_recipes]
+            PL[ext_meal_plans]
+        end
+
+        ext1 -. soft FK<br/>linked_page_path .-> P
+        ext1 -. shares .-> E
+        ext2 -. shares .-> E
+    end
+
+    classDef core fill:#1f6feb,stroke:#0d419d,color:#fff
+    classDef ext fill:#bf8700,stroke:#7a5800,color:#fff
+    class P,E,A,EV,SUB,SRV core
+    class C,O,R,PL ext

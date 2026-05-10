@@ -1,0 +1,19 @@
+%% Storage uniform / permissions scoped at master
+
+flowchart TB
+    subgraph storage["Local storage on every server"]
+        ST[wiki/ — full mirror]
+    end
+
+    subgraph perms["Master enforces write boundaries via DB rules"]
+        SC1["server-1 (webstore+admin)<br/>can write apps/webstore/, apps/admin/, integrations/03-..., log"]
+        SC2["server-2 (inventory+aggregator)<br/>can write apps/inventory/, apps/aggregator/, integrations/01-... (producer), 02-... Consumer notes, log"]
+        SC3["server-3 (pos)<br/>can write apps/pos/, integrations/02-... (producer), 01-... Consumer notes, log"]
+    end
+
+    storage --> perms
+
+    classDef store fill:#238636,stroke:#0f5223,color:#fff
+    classDef rule fill:#1f6feb,stroke:#0d419d,color:#fff
+    class ST store
+    class SC1,SC2,SC3 rule

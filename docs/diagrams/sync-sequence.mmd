@@ -1,0 +1,33 @@
+%% VaultMCP sync — read, write happy path, write conflict
+
+sequenceDiagram
+    participant Sess as Claude Code
+    participant FS as Local mirror
+    participant Agent as Agent
+    participant MCP as Master MCP
+    participant DB as Postgres
+    participant Sub as Other agents
+
+    Note over Sess: read flow
+    Sess->>FS: read apps/inv/README.md
+    FS-->>Sess: content (instant, local)
+
+    Note over Sess: write flow (happy)
+    Sess->>FS: write apps/inv/README.md
+    FS->>Agent: file change
+    Agent->>MCP: wiki.write(path, content, base_version=42)
+    MCP->>DB: INSERT pages, INSERT events
+    DB-->>MCP: version=43
+    MCP-->>Agent: 200 {version: 43}
+    DB-->>Sub: NOTIFY events_channel
+    Sub->>Sub: SSE: PageChanged, apply locally
+
+    Note over Sess: write flow (conflict)
+    Sess->>FS: write apps/inv/README.md
+    FS->>Agent: file change
+    Agent->>MCP: wiki.write(..., base_version=42)
+    MCP->>DB: SELECT version
+    DB-->>MCP: 43 (someone else wrote)
+    MCP-->>Agent: 409 {current_version: 43, current_content: Z}
+    Agent->>FS: replace local with Z
+    Agent->>Sess: notify "conflict"

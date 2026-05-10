@@ -1,0 +1,40 @@
+%% VaultMCP topology — master + agents + DB + dashboard + extensions
+
+flowchart LR
+    subgraph master["Master server"]
+        DB[("Postgres+<br/>pgvector")]
+        MCP[MCP server]
+        DASH[Dashboard]
+        WIKI[/wiki rendering<br/>git mirror/]
+        EW[embedding<br/>worker]
+        DB <--> MCP
+        DB <--> DASH
+        DB --> WIKI
+        EW --> DB
+    end
+
+    subgraph s1["Server 1"]
+        A1[agent]
+        F1[/wiki mirror/]
+        A1 <--> F1
+    end
+
+    subgraph sN["Server N"]
+        AN[agent]
+        FN[/wiki mirror/]
+        AN <--> FN
+    end
+
+    EXT[Other apps:<br/>CRM, planner,<br/>custom agents]
+
+    A1 <-->|MCP| MCP
+    AN <-->|MCP| MCP
+    EXT <-->|SQL or MCP| DB
+
+    classDef master fill:#1f6feb,stroke:#0d419d,color:#fff
+    classDef server fill:#21262d,stroke:#30363d,color:#c9d1d9
+    classDef store fill:#238636,stroke:#0f5223,color:#fff
+    classDef ext fill:#bf8700,stroke:#7a5800,color:#fff
+    class DB,F1,FN,WIKI store
+    class MCP,DASH,EW,A1,AN master
+    class EXT ext

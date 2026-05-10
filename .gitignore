@@ -1,0 +1,40 @@
+# Editor local files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets that shouldn't land here
+*.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+id_rsa
+id_ed25519
+
+# Build artifacts (when code lands)
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+*.egg-info/
+node_modules/
+
+# Local databases (when code lands)
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+*.dump
+
+# Logs
+*.log
+logs/
