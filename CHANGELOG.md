@@ -2,6 +2,63 @@
 
 All notable changes to VaultMCP are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1] — 2026-05-10
+
+Polish + first-deploy fixes on top of v0.6.0. No breaking changes.
+
+### Added
+
+- **`vaultmcp-master mcp-stdio`** — official MCP protocol over
+  stdin/stdout via the `mcp` Python SDK. Any MCP-aware client
+  (Claude Desktop, IDE plugins) can now spawn the master as a
+  subprocess and talk natively. Six tools registered (`wiki.read`,
+  `list`, `search`, `audit`, `write`, `append_log`); `ext.*` stays
+  on the auth'd HTTP path.
+- **`vaultmcp-master render-all [--prefix ...]`** — rebuild the
+  on-disk wiki projection from the DB after a `pg_restore`.
+  Streams pages in path order so a wiki with hundreds of thousands
+  of entries doesn't materialise at once.
+- **`ext.deregister`** — closes the extension lifecycle. Drops every
+  `ext_<name>_*` table, the namespaced pages (cascades to
+  `embeddings` + `embedding_jobs`), the Postgres role, and the
+  `extensions` row. Idempotent.
+- **`/metrics` Prometheus endpoint** — gauges for pages, embeddings,
+  embedding-job queue depth (pending/failed), audit by outcome,
+  servers, extensions, plus `build_info{version=...}`. No external
+  prometheus_client dep.
+- **`bench/parallel.py`** — concurrent-load runner. Fires N async
+  workers in parallel, reports aggregate p50/p95/p99. Numbers in
+  `deploy/PERFORMANCE.md` (8×25 ops: writes p95 33.8ms ~190/s
+  aggregate, reads p95 19.9ms ~406/s aggregate).
+- **Auto-source env files** — when invoked from a shell (not
+  systemd), `vaultmcp-master` and `vaultmcp-agent` now look for
+  `~/.config/vaultmcp/agent.env` and `/srv/vaultmcp/master.env`
+  before raising. Setdefault means systemd-launched runs still win.
+
+### Fixed
+
+- **Graceful shutdown deadlock with active SSE subscribers**
+  (`d4cfe05`). `systemctl stop vaultmcp-master` was hanging the
+  full 90 s `TimeoutStopSec` while a remote agent had a
+  `/mcp/subscribe` connection open. uvicorn was parked waiting for
+  the request, the request was parked in `await sub.queue.get()`,
+  and `broadcaster.stop()` (which would have woken it) only runs
+  in lifespan `__aexit__` — *after* uvicorn finishes the wait.
+  Fix: subscribers now poll the queue with a 1s `wait_for` and
+  check `_stopping` themselves; uvicorn `timeout_graceful_shutdown=5`
+  as backstop. Stop time went from 90s+SIGKILL to 0.16s.
+- **`PermissionError` in `load_rules('/srv/vaultmcp/config.yaml')`**
+  when called from a user other than `vaultmcp` (tests, one-off
+  CLIs). `Path.is_file()` raised on the protected directory; now
+  caught and treated as "no config file present".
+
+### Operator notes
+
+- `bench/concurrent.py` was renamed to `bench/parallel.py` because
+  the former shadows stdlib `concurrent` (which asyncio imports at
+  startup) and broke the entire async runtime when invoked from
+  the `bench/` directory.
+
 ## [0.6.0] — 2026-05-10
 
 **Hardening phase.** Closes the v0.5/v0.6 ROADMAP slate: real
