@@ -28,7 +28,10 @@ from .db import Database
 LOG = logging.getLogger(__name__)
 
 
-@dataclass
+# eq=False keeps identity-based equality and hashing, which is what we want
+# for tracking subscribers in a set (each instance is its own subscription).
+# The default @dataclass sets __hash__ = None, making instances unhashable.
+@dataclass(eq=False)
 class _Subscriber:
     queue: asyncio.Queue[dict]
     prefix: str | None
