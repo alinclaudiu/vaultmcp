@@ -44,7 +44,7 @@ class MasterConfig:
             )
 
         wiki_dir = Path(
-            os.environ.get("VAULTMCP_WIKI_DIR", "/var/lib/vaultmcp/wiki")
+            os.environ.get("VAULTMCP_WIKI_DIR", "/srv/vaultmcp/wiki")
         ).expanduser().resolve()
 
         return cls(

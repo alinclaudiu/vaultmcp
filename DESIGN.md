@@ -240,7 +240,7 @@ CREATE TABLE extensions (
 
 ### 3.4 Wiki rendering (files on master)
 
-After every write, master writes (or git-commits) the corresponding markdown file at `/var/lib/vaultmcp/wiki/<path>`. This:
+After every write, master writes (or git-commits) the corresponding markdown file at `/srv/vaultmcp/wiki/<path>`. This:
 
 - Lets humans browse the wiki with `cat`, `less`, any editor
 - Lets the master serve the optional git remote (for VaultMesh-mode clients)
@@ -547,7 +547,7 @@ Master keeps a global monotonic version counter so this catch-up is well-defined
 
 ### Authorization (per-app ownership)
 
-Master config (`/var/lib/vaultmcp/config.yaml`) declares ownership rules:
+Master config (`/srv/vaultmcp/config.yaml`) declares ownership rules:
 
 ```yaml
 servers:

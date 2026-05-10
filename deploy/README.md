@@ -49,9 +49,10 @@ to master, and any other agent's writes will appear in your local mirror.
 1. Provision a master host with Postgres 15+ accessible.
 2. Install Python 3.11 and the VaultMCP package (`pip install vaultmcp`
    once published, or `pip install /path/to/vaultmcp` from this repo).
-3. Create the `vaultmcp` system user. Create `/var/lib/vaultmcp/wiki`
-   owned by it.
-4. Copy `master.env.example` to `/etc/vaultmcp/master.env` and edit.
+3. Create the `vaultmcp` system user. Create `/srv/vaultmcp/wiki`
+   owned by it (and `/srv/vaultmcp/` itself, mode 0750, owned by `vaultmcp:vaultmcp`).
+4. Copy `master.env.example` to `/srv/vaultmcp/master.env` (chmod 0640,
+   owned by `root:vaultmcp`) and edit.
 5. Copy `master.service` to `/etc/systemd/system/`.
 6. `systemctl daemon-reload && systemctl enable --now vaultmcp-master`.
 7. On each agent host: install the package, copy `agent.env.example` to
