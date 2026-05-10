@@ -46,6 +46,11 @@ def serve() -> None:
         host=config.http_host,
         port=config.http_port,
         log_level="info",
+        # Graceful-shutdown backstop: SSE clients are long-lived. The
+        # broadcaster's per-subscriber poll already exits cleanly on
+        # ``_stopping``, but we keep this short timeout as belt + braces
+        # so a misbehaving client cannot keep systemctl stop hung.
+        timeout_graceful_shutdown=5,
     )
 
 

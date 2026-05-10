@@ -113,7 +113,18 @@ def load_rules(path: Path | None = None) -> OwnershipRules:
     if path is None:
         env = os.environ.get(CONFIG_PATH_ENV)
         path = Path(env) if env else DEFAULT_CONFIG_PATH
-    if not path.is_file():
+    # ``is_file()`` raises PermissionError when the parent directory is
+    # protected (e.g. /srv/vaultmcp/ is 0750 vaultmcp:vaultmcp and the
+    # caller can't stat into it). Treat unreadable parents as "no
+    # config file present" — the master only needs to be able to read
+    # config.yaml when running as the vaultmcp user; tests and one-off
+    # CLIs running as a different user fall through to the empty-rules
+    # path.
+    try:
+        present = path.is_file()
+    except (OSError, PermissionError):
+        return OwnershipRules(())
+    if not present:
         return OwnershipRules(())
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

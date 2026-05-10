@@ -37,6 +37,14 @@ class _Subscriber:
     prefix: str | None
 
 
+# Special event pushed by ``EventBroadcaster.stop()`` so subscribers
+# parked in ``await queue.get()`` can wake up and exit cleanly. Any
+# value would do; using a singleton dict means the receiver doesn't
+# have to teach the JSON encoder about a new sentinel type — it
+# inspects the dict in-place and never yields it.
+_SHUTDOWN_SENTINEL: dict = {"_shutdown_": True}
+
+
 class EventBroadcaster:
     """Single-process fanout from Postgres NOTIFY to N HTTP subscribers."""
 
@@ -62,6 +70,22 @@ class EventBroadcaster:
             try:
                 await self._listen_task
             except asyncio.CancelledError:
+                pass
+        # Wake every active subscriber. Without this, each subscribe()
+        # generator is parked in ``await sub.queue.get()`` and uvicorn's
+        # graceful shutdown blocks indefinitely waiting for the SSE
+        # connection to close. We push a sentinel; the subscribe loop
+        # checks for it and returns.
+        async with self._lock:
+            subs = list(self._subscribers)
+        for sub in subs:
+            try:
+                sub.queue.put_nowait(_SHUTDOWN_SENTINEL)
+            except asyncio.QueueFull:
+                # The queue is full of pending events. The subscriber
+                # has already crashed or is unreachable — discarding
+                # this sentinel is fine; uvicorn's connection-level
+                # cancellation will tear it down.
                 pass
 
     async def _listen_loop(self) -> None:
@@ -170,7 +194,21 @@ class EventBroadcaster:
             self._subscribers.add(sub)
         try:
             while True:
-                event = await sub.queue.get()
+                # Poll with a short timeout so the loop can notice
+                # ``_stopping`` even when uvicorn defers the lifespan
+                # shutdown until after active requests close. Without
+                # this, a long-lived SSE client deadlocks shutdown:
+                # uvicorn waits for the request to end, the request
+                # waits for an event, the event won't come because
+                # broadcaster.stop() runs only on lifespan __aexit__.
+                try:
+                    event = await asyncio.wait_for(sub.queue.get(), timeout=1.0)
+                except TimeoutError:
+                    if self._stopping:
+                        return
+                    continue
+                if event is _SHUTDOWN_SENTINEL:
+                    return
                 yield event
         finally:
             async with self._lock:
