@@ -46,4 +46,3 @@ venv/
 # Logs
 *.log
 logs/
-/.ci-staging/
