@@ -159,6 +159,39 @@ class LogEntryOutput(BaseModel):
 
 
 # =============================================================
+# wiki.search
+# =============================================================
+
+
+class SearchInput(BaseModel):
+    """Query inputs for ``wiki.search``.
+
+    v0.4 lexical-only. The semantic / hybrid path lands once embeddings
+    are wired up; the on-the-wire shape stays the same so callers don't
+    have to change.
+    """
+
+    query: str = Field(..., min_length=1)
+    prefix: str | None = None
+    type: PageType | None = None
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class SearchResult(BaseModel):
+    path: str
+    type: PageType
+    owners: list[str]
+    updated: datetime
+    version: int
+    score: float
+    snippet: str = ""
+
+
+class SearchOutput(BaseModel):
+    entries: list[SearchResult]
+
+
+# =============================================================
 # wiki.audit
 # =============================================================
 

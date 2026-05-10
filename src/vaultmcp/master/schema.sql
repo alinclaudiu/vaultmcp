@@ -154,3 +154,23 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 
 CREATE INDEX IF NOT EXISTS subscriptions_server_idx ON subscriptions(server_id);
+
+-- =============================================================
+-- Full-text search (lexical)
+--
+-- A generated tsvector column on `pages` enables `wiki.search` over
+-- the page body (and title, weighted higher). Semantic search via
+-- pgvector layers on top in v0.4 — `wiki.search` will combine the two
+-- through Reciprocal Rank Fusion. Until then this gives basic search
+-- with zero external dependencies.
+-- =============================================================
+
+ALTER TABLE pages
+    ADD COLUMN IF NOT EXISTS content_tsv tsvector
+    GENERATED ALWAYS AS (
+        setweight(to_tsvector('english', coalesce(metadata->>'title', '')), 'A')
+        || setweight(to_tsvector('english', coalesce(content, '')), 'B')
+    ) STORED;
+
+CREATE INDEX IF NOT EXISTS pages_content_tsv_idx
+    ON pages USING GIN (content_tsv);

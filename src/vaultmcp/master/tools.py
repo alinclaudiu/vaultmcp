@@ -26,6 +26,9 @@ from ..shared.types import (
     PageMetadata,
     ReadInput,
     ReadOutput,
+    SearchInput,
+    SearchOutput,
+    SearchResult,
     WriteConflict,
     WriteInput,
     WriteOutput,
@@ -53,6 +56,7 @@ __all__ = [
     "handle_audit",
     "handle_list",
     "handle_read",
+    "handle_search",
     "handle_write",
 ]
 
@@ -197,6 +201,28 @@ async def handle_list(db: Database, inp: ListInput) -> ListOutput:
     )
 
 
+async def handle_search(db: Database, inp: SearchInput) -> SearchOutput:
+    rows = await db.search_pages(
+        query=inp.query,
+        prefix=inp.prefix,
+        type_filter=inp.type,
+        limit=inp.limit,
+    )
+    entries = [
+        SearchResult(
+            path=r["path"],
+            type=r["type"],
+            owners=list(r["owners"] or []),
+            updated=r["updated"],
+            version=r["version"],
+            score=float(r["score"] or 0.0),
+            snippet=r["snippet"] or "",
+        )
+        for r in rows
+    ]
+    return SearchOutput(entries=entries)
+
+
 async def handle_audit(db: Database, inp: AuditInput) -> AuditOutput:
     rows = await db.list_audit(
         path=inp.path,
@@ -285,5 +311,7 @@ async def call_handler_by_name(
         ).model_dump(mode="json")
     if name == "wiki.audit":
         return (await handle_audit(db, AuditInput(**args))).model_dump(mode="json")
+    if name == "wiki.search":
+        return (await handle_search(db, SearchInput(**args))).model_dump(mode="json")
 
     raise ToolError(f"Unknown tool: {name}", status=400)

@@ -470,6 +470,49 @@ class Database:
             client_ip,
         )
 
+    # ---------- search ----------
+
+    async def search_pages(
+        self,
+        *,
+        query: str,
+        prefix: str | None = None,
+        type_filter: str | None = None,
+        limit: int = 20,
+    ) -> list[asyncpg.Record]:
+        """Full-text search across pages, ranked by ts_rank_cd.
+
+        Uses ``websearch_to_tsquery`` so the query string can include
+        unquoted phrases, ``-exclusions``, and ``OR`` — i.e. the
+        Google-ish syntax users already know. Empty result set is
+        returned when no rows match (no error).
+        """
+        params: list[Any] = [query]
+        clauses = ["content_tsv @@ websearch_to_tsquery('english', $1)"]
+
+        if prefix:
+            params.append(prefix + "%")
+            clauses.append(f"path LIKE ${len(params)}")
+        if type_filter:
+            params.append(type_filter)
+            clauses.append(f"type = ${len(params)}")
+
+        params.append(limit)
+        sql = (
+            "SELECT path, type, owners, updated, version, "
+            "ts_rank_cd(content_tsv, websearch_to_tsquery('english', $1)) AS score, "
+            "ts_headline("
+            "  'english', content, websearch_to_tsquery('english', $1), "
+            "  'StartSel=<<,StopSel=>>,MaxFragments=1,MaxWords=20,MinWords=5'"
+            ") AS snippet "
+            "FROM pages WHERE "
+            + " AND ".join(clauses)
+            + f" ORDER BY score DESC, updated DESC LIMIT ${len(params)}"
+        )
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(sql, *params)
+
     # ---------- audit (read) ----------
 
     async def list_audit(

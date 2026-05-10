@@ -109,6 +109,21 @@ class MasterClient:
     async def append_log(self, entry: dict[str, Any]) -> dict[str, Any]:
         return await self._call("wiki.append_log", entry)
 
+    async def search(
+        self,
+        query: str,
+        *,
+        prefix: str | None = None,
+        type_filter: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        args: dict[str, Any] = {"query": query, "limit": limit}
+        if prefix:
+            args["prefix"] = prefix
+        if type_filter:
+            args["type"] = type_filter
+        return await self._call("wiki.search", args)
+
     async def audit(
         self,
         *,
