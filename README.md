@@ -207,6 +207,34 @@ systemctl --user enable --now vaultmcp-agent
 
 Drop a markdown file under `~/vault/apps/myapp/` and watch it land on the master at `/srv/vaultmcp/wiki/apps/myapp/` within a second or two. The dashboard at `http://<master-ip>:8080/` shows the activity live (gate it behind `VAULTMCP_DASHBOARD_PASSWORD` before exposing).
 
+### Wiring an MCP-aware client
+
+The master speaks the **official MCP protocol** in two transports:
+
+- **stdio** — `vaultmcp-master mcp-stdio` reads/writes JSON-RPC on stdin/stdout. Spawn it as a subprocess from any MCP client.
+- **streamable-HTTP** — `POST + SSE` at `http://<master-ip>:8080/mcp/streamable/`. Dial directly from a network client.
+
+For example, Claude Desktop's config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows) — stdio variant:
+
+```json
+{
+  "mcpServers": {
+    "vaultmcp": {
+      "command": "/opt/vaultmcp/venv/bin/vaultmcp-master",
+      "args": ["mcp-stdio"],
+      "env": {
+        "VAULTMCP_DATABASE_URL": "postgres://vaultmcp:...@localhost:5432/vaultmcp?sslmode=disable",
+        "VAULTMCP_WIKI_DIR": "/srv/vaultmcp/wiki"
+      }
+    }
+  }
+}
+```
+
+(Six tools register: `wiki.read`, `wiki.list`, `wiki.search`, `wiki.audit`, `wiki.write`, `wiki.append_log`. `ext.*` admin tools stay on the auth'd HTTP path.)
+
+For HTTP-mode, point any MCP HTTP client at `http://<master-ip>:8080/mcp/streamable/`. The legacy `POST /mcp/call` JSON-over-HTTP shim from v0.2 also still works for clients written before the SDK adapter landed.
+
 ---
 
 ## Reading order
