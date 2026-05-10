@@ -418,6 +418,19 @@ class Database:
                 limit,
             )
 
+    async def recent_events(self, *, limit: int = 50) -> list[asyncpg.Record]:
+        """Return the N most recent events, newest first. Used by the dashboard."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """
+                SELECT id, ts, event_type, path, global_version
+                FROM events
+                ORDER BY ts DESC, id DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+
     @asynccontextmanager
     async def listen(self, channel: str) -> AsyncIterator[asyncpg.Connection]:
         """Acquire a dedicated connection and LISTEN on a channel.

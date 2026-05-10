@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Activity{% endblock %}
+{% block content %}
+<section>
+  <h2 style="margin-bottom: 0.25rem">Live activity</h2>
+  <p class="muted">
+    Most recent {{ events|length }} events. Auto-refreshes every 5 seconds via HTMX.
+    SSE-driven push updates land alongside the live-events fanout in a follow-up.
+  </p>
+
+  <div hx-get="/dashboard/activity-rows"
+       hx-trigger="every 5s"
+       hx-swap="innerHTML">
+    {% include "_activity_rows.html" %}
+  </div>
+</section>
+{% endblock %}

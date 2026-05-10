@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}VaultMCP{% endblock %} — VaultMCP</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    :root { --pico-spacing: 0.75rem; }
+    nav.app-nav ul { display: flex; gap: 1rem; flex-wrap: wrap; }
+    nav.app-nav a[aria-current="page"] { font-weight: 700; }
+    table.compact td, table.compact th { padding: 0.4rem 0.6rem; }
+    .pill {
+      display: inline-block; padding: 0.05rem 0.45rem; border-radius: 999px;
+      font-size: 0.75rem; background: var(--pico-secondary-background);
+    }
+    .pill-PageChanged { background: #d6e4ff; color: #003d99; }
+    .pill-PageDeleted { background: #ffd6d6; color: #800; }
+    .pill-LogAppended { background: #e0f7e0; color: #1a4d1a; }
+    .pill-Heartbeat { background: #eee; color: #666; }
+    .muted { color: var(--pico-muted-color); font-size: 0.85em; }
+    code.path { font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <header>
+      <hgroup>
+        <h1 style="margin-bottom: 0.25rem">VaultMCP</h1>
+        <p class="muted">{{ version }} — master at {{ master_url }}</p>
+      </hgroup>
+      <nav class="app-nav">
+        <ul>
+          <li><a href="/" {% if active=='activity' %}aria-current="page"{% endif %}>Activity</a></li>
+        </ul>
+      </nav>
+    </header>
+    <hr>
+    {% block content %}{% endblock %}
+    <hr>
+    <footer class="muted">
+      <small>VaultMCP dashboard. Localhost-bound; HTTP Basic gate lands in a
+      follow-up. Read-only by design — wiki edits go through agents.</small>
+    </footer>
+  </main>
+</body>
+</html>

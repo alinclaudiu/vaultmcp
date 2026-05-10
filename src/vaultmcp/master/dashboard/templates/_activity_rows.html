@@ -1,0 +1,23 @@
+{# Table fragment — rendered both inside the full page and as the htmx swap target. #}
+<table class="compact striped">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Event</th>
+      <th>Path</th>
+      <th>gv</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for ev in events %}
+    <tr>
+      <td><span class="muted" title="{{ ev.ts.isoformat() }}">{{ ev.ts.strftime('%H:%M:%S') }}</span></td>
+      <td><span class="pill pill-{{ ev.event_type }}">{{ ev.event_type }}</span></td>
+      <td>{% if ev.path %}<code class="path">{{ ev.path }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="muted">{{ ev.global_version }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No events yet. Try a wiki.write to populate this view.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

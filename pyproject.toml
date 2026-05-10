@@ -26,6 +26,8 @@ dependencies = [
     # HTTP / sidecar
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.27.0",
+    # Dashboard templating
+    "jinja2>=3.1.0",
     # Validation / schemas
     "pydantic>=2.6.0",
     # Frontmatter parsing
@@ -67,10 +69,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/vaultmcp"]
 
-# Include non-Python data files (the SQL migration ships with the package
-# so `vaultmcp-master migrate` works without the source tree).
+# Include non-Python data files (the SQL migration + dashboard templates
+# ship with the package so `vaultmcp-master serve` works from a wheel).
 [tool.hatch.build.targets.wheel.force-include]
 "src/vaultmcp/master/schema.sql" = "vaultmcp/master/schema.sql"
+"src/vaultmcp/master/dashboard/templates" = "vaultmcp/master/dashboard/templates"
 
 [tool.hatch.build.targets.sdist]
 include = [

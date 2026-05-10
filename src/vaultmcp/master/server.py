@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .auth import AuthenticatedServer, hash_token, parse_bearer
 from .config import MasterConfig
+from .dashboard import build_router as build_dashboard_router
 from .db import Database
 from .ownership import OwnershipRules, load_rules
 from .sse import EventBroadcaster, format_sse
@@ -92,6 +93,13 @@ def build_app(config: MasterConfig) -> FastAPI:
         title="VaultMCP master",
         version="0.2.1",
         lifespan=lifespan,
+    )
+
+    # Dashboard router (read-only HTML views over Postgres state).
+    # Mounted before the JSON routes so /healthz etc. still take
+    # precedence by being declared later on the same app.
+    app.include_router(
+        build_dashboard_router(config=config, get_db=lambda: _get_db(state))
     )
 
     # ---------- auth dependency ----------
