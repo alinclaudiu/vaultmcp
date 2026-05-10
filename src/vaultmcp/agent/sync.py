@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 
 from .client import MasterClient, MasterClientError
+from .suppressor import SyncSuppressor
 from .version_cache import VersionCache
 
 LOG = logging.getLogger("vaultmcp.agent.sync")
@@ -32,12 +33,14 @@ class SyncEngine:
         client: MasterClient,
         cache: VersionCache,
         vault_dir: Path,
+        suppressor: SyncSuppressor | None = None,
         backoff_initial_seconds: float = 1.0,
         backoff_max_seconds: float = 60.0,
     ) -> None:
         self.client = client
         self.cache = cache
         self.vault_dir = vault_dir
+        self.suppressor = suppressor
         self.backoff_initial = backoff_initial_seconds
         self.backoff_max = backoff_max_seconds
         self._stopping = False
@@ -106,6 +109,23 @@ class SyncEngine:
         except ValueError:
             LOG.warning("Refusing to write outside vault: %s", path)
             return
+
+        # Skip the disk write entirely if the file already has the
+        # correct content. Avoids an unnecessary inotify event that
+        # would tickle the watcher even with suppression in place.
+        if target.exists():
+            try:
+                if target.read_text(encoding="utf-8") == content:
+                    return
+            except OSError:
+                pass
+
+        # Mark the path BEFORE writing so the watcher's event handler
+        # (which may run on a different thread very fast) sees the
+        # suppression flag in time.
+        if self.suppressor is not None:
+            self.suppressor.mark(target)
+
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
         tmp.write_text(content, encoding="utf-8")

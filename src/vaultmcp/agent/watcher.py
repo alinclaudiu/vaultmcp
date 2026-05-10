@@ -27,6 +27,7 @@ from watchdog.observers import Observer
 from .client import ConflictError, MasterClient, MasterClientError
 from .config import AgentConfig
 from .queue import WriteQueue
+from .suppressor import SyncSuppressor
 from .version_cache import VersionCache
 
 LOG = logging.getLogger("vaultmcp.agent.watcher")
@@ -74,11 +75,13 @@ class FileWatcher:
         client: MasterClient,
         cache: VersionCache,
         queue: WriteQueue,
+        suppressor: SyncSuppressor | None = None,
     ) -> None:
         self.config = config
         self.client = client
         self.cache = cache
         self.queue = queue
+        self.suppressor = suppressor
         self._pending: dict[Path, asyncio.TimerHandle] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._observer: Observer | None = None
@@ -118,6 +121,13 @@ class FileWatcher:
         if not abs_path.suffix == ".md":
             return
         if any(part.startswith(".") for part in abs_path.parts):
+            return
+
+        # Skip events caused by the sync engine writing master's content
+        # to disk. Without this guard, every incoming PageChanged event
+        # triggers a watcher event, which posts wiki.write back to master,
+        # which 409s, which makes sync re-apply, which… (echo loop).
+        if self.suppressor is not None and self.suppressor.is_suppressed(abs_path):
             return
 
         # Cancel pending timer for this path.
@@ -219,6 +229,19 @@ class FileWatcher:
             target.relative_to(self.config.vault_dir.resolve())
         except ValueError:
             return
+
+        # Skip the disk write if content already matches.
+        if target.exists():
+            try:
+                if target.read_text(encoding="utf-8") == content:
+                    return
+            except OSError:
+                pass
+
+        # Suppress the inotify echo this write will produce.
+        if self.suppressor is not None:
+            self.suppressor.mark(target)
+
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
         tmp.write_text(content, encoding="utf-8")

@@ -19,6 +19,7 @@ import click
 from .client import MasterClient, MasterClientError
 from .config import AgentConfig
 from .queue import WriteQueue
+from .suppressor import SyncSuppressor
 from .sync import SyncEngine
 from .version_cache import VersionCache
 from .watcher import FileWatcher
@@ -48,8 +49,19 @@ def run() -> None:
         queue = WriteQueue(config.state_dir / "queue")
         client = MasterClient(config.master_url)
 
-        watcher = FileWatcher(config, client, cache, queue)
-        sync = SyncEngine(client=client, cache=cache, vault_dir=config.vault_dir)
+        # Shared between sync (which writes locally on incoming events)
+        # and watcher (which observes local writes). The suppressor
+        # tells the watcher "ignore this path; sync just touched it"
+        # so they don't echo each other into a 409 loop.
+        suppressor = SyncSuppressor()
+
+        watcher = FileWatcher(config, client, cache, queue, suppressor=suppressor)
+        sync = SyncEngine(
+            client=client,
+            cache=cache,
+            vault_dir=config.vault_dir,
+            suppressor=suppressor,
+        )
 
         try:
             await asyncio.gather(watcher.run(), sync.run())
