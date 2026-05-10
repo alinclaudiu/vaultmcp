@@ -20,9 +20,27 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
+
+
+def _json_default(obj: Any) -> Any:
+    """JSON encoder fallback for non-builtin types we store in JSONB.
+
+    YAML frontmatter often contains date/datetime values (e.g. ``updated: 2026-05-10``);
+    Pydantic models we serialize for events and audit may contain them too.
+    Without this fallback, ``json.dumps`` raises TypeError on datetime.
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _json_dumps(obj: Any) -> str:
+    return json.dumps(obj, default=_json_default)
 
 import asyncpg
 
@@ -107,10 +125,11 @@ class Database:
 
     @staticmethod
     async def _init_connection(conn: asyncpg.Connection) -> None:
-        # JSONB columns come back as Python dicts/lists; ergonomic.
+        # JSONB columns come back as Python dicts/lists; encoder handles
+        # datetime/date (which YAML frontmatter often produces).
         await conn.set_type_codec(
             "jsonb",
-            encoder=json.dumps,
+            encoder=_json_dumps,
             decoder=json.loads,
             schema="pg_catalog",
         )

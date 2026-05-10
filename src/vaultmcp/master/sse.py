@@ -66,9 +66,10 @@ class EventBroadcaster:
         try:
             async with self.db.listen("events_channel") as conn:
                 self._listen_conn = conn
-                conn.add_listener("events_channel", self._on_notify)  # type: ignore[arg-type]
-                # Block forever; conn.add_listener does the work via the
-                # asyncpg event loop integration.
+                # asyncpg >= 0.30 made add_listener a coroutine; await it
+                # so the callback is actually registered (a forgotten await
+                # silently disables the entire fanout).
+                await conn.add_listener("events_channel", self._on_notify)  # type: ignore[arg-type]
                 while not self._stopping:
                     await asyncio.sleep(3600)
         except asyncio.CancelledError:
