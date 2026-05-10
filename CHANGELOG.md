@@ -2,6 +2,61 @@
 
 All notable changes to VaultMCP are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] — 2026-05-10
+
+**Hardening phase.** Closes the v0.5/v0.6 ROADMAP slate: real
+Postgres-role isolation for extensions, the rest of the `ext.*`
+surface (write + embed + emit_event), backup/restore runbook, and
+a perf baseline.
+
+### Added
+
+- **`ext.exec`** — mutating sibling of `ext.query`. Read-write
+  transaction under the extension's role; rows_affected returned.
+- **`ext.embed`** — extensions index their own content into the
+  shared `embeddings` table. Path is forced into the `ext/<name>/…`
+  namespace; the embedding worker drains the queue exactly like for
+  `wiki.write`.
+- **`ext.emit_event`** — extensions push live events into the
+  shared `events` feed; `event_type` is namespaced to
+  `ext_<name>_<type>` so the dashboard's activity page surfaces
+  them alongside `PageChanged`.
+- **`bench/run.py`** — single-client latency + throughput
+  benchmark. Captures p50/p95/p99 + throughput for write/read/search.
+- **`deploy/BACKUP.md`** — full backup/restore runbook (Postgres
+  custom-format dump, wiki tar, daily script with retention,
+  verification path, reverse-proxy / TLS guidance).
+- **`deploy/PERFORMANCE.md`** — baseline numbers on the dev box.
+
+### Changed — security
+
+- **Postgres-role isolation** for extensions (deferred from v0.5).
+  Each `ext.register` now provisions a NOLOGIN
+  `vaultmcp_ext_<name>` role and grants it precisely what the
+  policy declares: `USAGE` on `public`, optional `SELECT` on
+  `pages` / `audit`, optional DML on `embeddings` + `events` +
+  the relevant sequences. `ext.query` / `ext.exec` issue
+  `SET LOCAL ROLE` so the role auto-resets at transaction end —
+  the role's GRANTs become the actual security boundary.
+- Three layers of defense for `ext.query`:
+  1. Lexical reject of write keywords at the tools layer.
+  2. `READ ONLY` transaction at the DB layer.
+  3. Postgres role-level GRANTs scoped by policy.
+- `extensions.role_name TEXT NOT NULL UNIQUE` added to the schema.
+- Test fixture `clean_database` now also drops `vaultmcp_ext_*`
+  roles, with a defensive `GRANT … TO CURRENT_USER` so
+  `DROP OWNED BY` works even when a previous test crashed before
+  the registration's own grant landed.
+
+### Operator step
+
+- `vaultmcp` DB role needs `CREATEROLE`. Documented in
+  `deploy/README.md` alongside the existing `CREATE EXTENSION
+  vector` step. One-time superuser command:
+  ```bash
+  sudo -u postgres psql -c "ALTER ROLE vaultmcp WITH CREATEROLE;"
+  ```
+
 ## [0.5.0] — 2026-05-10
 
 **Extensions phase.** Master now hosts other applications on the same
