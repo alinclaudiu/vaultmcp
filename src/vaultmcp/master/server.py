@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .auth import AuthenticatedServer, hash_token, parse_bearer
@@ -32,6 +32,7 @@ from .config import MasterConfig
 from .dashboard import build_router as build_dashboard_router
 from .db import Database
 from .embeddings import EmbeddingWorker, build_provider
+from .metrics import render_metrics
 from .ownership import OwnershipRules, load_rules
 from .sse import EventBroadcaster, format_sse
 from .tools import ConflictError, ToolError, call_handler_by_name
@@ -174,6 +175,16 @@ def build_app(config: MasterConfig) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ---------- /metrics ----------
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> Response:
+        """Prometheus text-format metrics. No auth — gate at the proxy
+        layer or via firewall rules if you expose this beyond the
+        master's localhost bind."""
+        body = await render_metrics(_get_db(state))
+        return Response(content=body, media_type="text/plain; version=0.0.4")
 
     # ---------- /mcp/call ----------
 
