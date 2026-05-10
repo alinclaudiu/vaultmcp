@@ -13,7 +13,7 @@ import json
 import os
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +33,7 @@ class QueuedWrite:
         return json.dumps(asdict(self), ensure_ascii=False, indent=2)
 
     @classmethod
-    def from_json(cls, text: str) -> "QueuedWrite":
+    def from_json(cls, text: str) -> QueuedWrite:
         data = json.loads(text)
         return cls(**data)
 
@@ -59,11 +59,11 @@ class WriteQueue:
         base_version: int | None,
         session: dict[str, Any],
     ) -> QueuedWrite:
-        ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
+        ts = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
         item_id = f"{ts}-{uuid.uuid4().hex[:8]}"
         item = QueuedWrite(
             id=item_id,
-            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+            timestamp=datetime.now(tz=UTC).isoformat(),
             path=path,
             content=content,
             base_version=base_version,
@@ -106,7 +106,7 @@ class WriteQueue:
         os.replace(tmp, target)
 
     def _sideline(self, fp: Path, *, reason: str) -> None:
-        ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        ts = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
         dst = self.failed_dir / f"{ts}-{reason}-{fp.name}"
         try:
             fp.rename(dst)

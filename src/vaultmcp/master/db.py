@@ -18,11 +18,14 @@ roll back — the DB is the source of truth).
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
+
+import asyncpg
 
 
 def _json_default(obj: Any) -> Any:
@@ -41,9 +44,6 @@ def _json_default(obj: Any) -> Any:
 
 def _json_dumps(obj: Any) -> str:
     return json.dumps(obj, default=_json_default)
-
-import asyncpg
-
 
 # =============================================================
 # Page row + result types
@@ -65,7 +65,7 @@ class PageRow:
     last_writer_session: str
 
     @classmethod
-    def from_record(cls, r: asyncpg.Record) -> "PageRow":
+    def from_record(cls, r: asyncpg.Record) -> PageRow:
         return cls(
             path=r["path"],
             content=r["content"],
@@ -112,7 +112,7 @@ class Database:
         self.pool = pool
 
     @classmethod
-    async def connect(cls, dsn: str, *, min_size: int = 1, max_size: int = 10) -> "Database":
+    async def connect(cls, dsn: str, *, min_size: int = 1, max_size: int = 10) -> Database:
         pool = await asyncpg.create_pool(
             dsn=dsn,
             min_size=min_size,
@@ -146,7 +146,7 @@ class Database:
 
     async def iter_all_pages(
         self, *, prefix: str | None = None, batch: int = 200
-    ) -> "AsyncIterator[PageRow]":
+    ) -> AsyncIterator[PageRow]:
         """Stream every page row, in path order. Used by ``render-all``.
 
         Pulls in batches of ``batch`` rows so a wiki with hundreds of
@@ -388,7 +388,7 @@ class Database:
                     path=path,
                     version=new_version,
                     global_version=gv,
-                    applied_at=datetime.now(tz=timezone.utc),
+                    applied_at=datetime.now(tz=UTC),
                 )
 
     # ---------- log ----------
@@ -1062,7 +1062,7 @@ class Database:
         ``pages`` row in the ``ext/<name>/...`` namespace with type
         ``shared``. The worker then drains the job like any other.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 # Upsert a synthetic page so the FK on embeddings(path)
@@ -1094,7 +1094,7 @@ class Database:
                     content,
                     new_version,
                     gv,
-                    datetime.now(tz=timezone.utc),
+                    datetime.now(tz=UTC),
                 )
                 await conn.execute(
                     """

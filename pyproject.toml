@@ -104,6 +104,25 @@ ignore = [
     "E501",  # line length is enforced by formatter
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's idiomatic ``Depends(...)`` / ``Body(...)`` / ``Header(...)``
+# in argument defaults trips B008 because they are function calls. The
+# whole framework runs on this pattern; the rule produces a false
+# positive every time it fires here.
+"src/vaultmcp/master/server.py" = ["B008"]
+"src/vaultmcp/master/dashboard/router.py" = ["B008"]
+
+# Fire-and-forget background tasks (heartbeat loop, fanout dispatch)
+# don't keep a reference to the task on purpose — the broadcaster
+# owns the listen task explicitly and the rest are tied to the
+# overall app lifespan.
+"src/vaultmcp/master/sse.py" = ["RUF006"]
+
+# The agent's queue-replay task is intentionally fire-and-forget
+# during startup; the watcher's main loop owns its lifetime via the
+# ``_stopping`` flag.
+"src/vaultmcp/agent/watcher.py" = ["RUF006"]
+
 [tool.ruff.format]
 quote-style = "double"
 

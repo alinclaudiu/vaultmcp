@@ -44,8 +44,8 @@ REQUIRED_FRONTMATTER_KEYS: Final[tuple[str, ...]] = (
 # Secret pattern catalog
 # =============================================================
 #
-# Names are surfaced in error messages — keep them stable, since users
-# may want to add a `# noqa: <pattern>` style escape hatch later.
+# Names are surfaced in error messages — keep them stable, since
+# users may want to add a per-pattern escape hatch later.
 # Patterns are tuned for low false-positive rates. They are NOT a
 # replacement for proper secret scanning — defense in depth only.
 

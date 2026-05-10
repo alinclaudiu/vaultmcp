@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from pathlib import Path
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler

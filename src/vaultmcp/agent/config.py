@@ -35,7 +35,7 @@ class AgentConfig:
     poll_interval_seconds: int = 5
 
     @classmethod
-    def from_env(cls) -> "AgentConfig":
+    def from_env(cls) -> AgentConfig:
         # When invoked from a shell (not systemd's EnvironmentFile),
         # try to source ``~/.config/vaultmcp/agent.env`` so commands
         # like ``vaultmcp-agent status`` work without manual ``source``.

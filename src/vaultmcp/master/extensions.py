@@ -45,7 +45,6 @@ from typing import Final
 from ..shared.types import EXT_COLUMN_TYPES, ExtColumnSpec
 from .errors import ToolError, ValidationFailed
 
-
 # Identifier regex re-stated here so we can validate names that aren't
 # coming through Pydantic (e.g. parameters synthesized at runtime).
 _IDENT_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_]*$")

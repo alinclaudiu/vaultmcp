@@ -10,7 +10,7 @@ server module wires them into the actual MCP transport.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -168,7 +168,7 @@ async def handle_write(
 
     type_ = fm_mod.extract_type(metadata)
     owners = fm_mod.extract_owners(metadata)
-    updated = fm_mod.extract_updated(metadata) or datetime.now(tz=timezone.utc)
+    updated = fm_mod.extract_updated(metadata) or datetime.now(tz=UTC)
 
     result = await db.write_page(
         path=inp.path,

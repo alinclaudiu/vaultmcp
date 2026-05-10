@@ -64,7 +64,7 @@ class MasterConfig:
     )
 
     @classmethod
-    def from_env(cls) -> "MasterConfig":
+    def from_env(cls) -> MasterConfig:
         """Build a config from process env. Useful for systemd EnvironmentFile."""
         # Auto-source /srv/vaultmcp/master.env when running CLI commands
         # (migrate, add-server, render-all, …) outside systemd. setdefault

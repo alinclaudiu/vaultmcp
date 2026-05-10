@@ -23,9 +23,8 @@ should layer a recording rule on top.
 
 from __future__ import annotations
 
-from .. import __version__ as _PKG_VERSION
+from .. import __version__ as _pkg_version
 from .db import Database
-
 
 _HEADER = (
     "# HELP vaultmcp_pages_total Number of pages in the wiki.\n"
@@ -83,6 +82,6 @@ async def render_metrics(db: Database) -> str:
         )
     lines.append(f"vaultmcp_servers_registered {int(servers or 0)}")
     lines.append(f"vaultmcp_extensions_registered {int(extensions or 0)}")
-    lines.append(f'vaultmcp_build_info{{version="{_PKG_VERSION}"}} 1')
+    lines.append(f'vaultmcp_build_info{{version="{_pkg_version}"}} 1')
     lines.append("")  # trailing newline
     return "\n".join(lines)
