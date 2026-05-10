@@ -32,6 +32,13 @@ class MasterConfig:
     # Hard cap on a single page's content size, in bytes. 1 MiB default.
     max_file_size_bytes: int = 1 * 1024 * 1024
 
+    # Dashboard HTTP Basic auth. When ``dashboard_password`` is None,
+    # the dashboard is open (relies on the localhost bind for protection).
+    # When set, every dashboard route requires Basic auth matching the
+    # configured username + password.
+    dashboard_username: str = "admin"
+    dashboard_password: str | None = None
+
     # Optional path to the ownership/policy YAML config. None means
     # ``/srv/vaultmcp/config.yaml`` if it exists, else no path-level
     # rules are enforced.
@@ -70,4 +77,6 @@ class MasterConfig:
                 if "VAULTMCP_CONFIG_FILE" in os.environ
                 else None
             ),
+            dashboard_username=os.environ.get("VAULTMCP_DASHBOARD_USERNAME", "admin"),
+            dashboard_password=os.environ.get("VAULTMCP_DASHBOARD_PASSWORD") or None,
         )

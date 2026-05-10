@@ -77,6 +77,85 @@ async def test_dashboard_renders_empty_activity(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_basic_auth_when_password_configured(
+    clean_database: str, tmp_path: Path
+) -> None:
+    """When VAULTMCP_DASHBOARD_PASSWORD is set, every dashboard route is gated."""
+    import socket as _socket
+
+    from vaultmcp.master.config import MasterConfig
+    from vaultmcp.master.server import build_app
+
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = int(s.getsockname()[1])
+    base_url = f"http://127.0.0.1:{port}"
+
+    config = MasterConfig(
+        database_url=clean_database,
+        wiki_dir=tmp_path / "master_wiki",
+        dashboard_username="admin",
+        dashboard_password="hunter2",
+    )
+    config.wiki_dir.mkdir()
+    app = build_app(config)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, host="127.0.0.1", port=port, log_level="warning", lifespan="on"
+        )
+    )
+    task = asyncio.create_task(server.serve())
+    try:
+        deadline = time.monotonic() + 10
+        while not getattr(server, "started", False):
+            if time.monotonic() > deadline:
+                raise AssertionError("master never started")
+            await asyncio.sleep(0.05)
+
+        async with httpx.AsyncClient(base_url=base_url) as client:
+            # No credentials -> 401
+            resp = await client.get("/")
+            assert resp.status_code == 401
+            assert resp.headers.get("www-authenticate", "").lower().startswith("basic")
+
+            # Wrong password -> 401
+            resp = await client.get(
+                "/", auth=httpx.BasicAuth("admin", "wrong")
+            )
+            assert resp.status_code == 401
+
+            # Correct credentials -> 200
+            resp = await client.get(
+                "/", auth=httpx.BasicAuth("admin", "hunter2")
+            )
+            assert resp.status_code == 200
+            assert "Live activity" in resp.text
+
+            # Same gate applies to /servers, /audit, /search.
+            for route in ("/servers", "/audit", "/search"):
+                resp = await client.get(route)
+                assert resp.status_code == 401, route
+                resp = await client.get(
+                    route, auth=httpx.BasicAuth("admin", "hunter2")
+                )
+                assert resp.status_code == 200, route
+
+            # /healthz and /mcp/* are NOT under the dashboard router.
+            resp = await client.get("/healthz")
+            assert resp.status_code == 200
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(task, timeout=5)
+        except TimeoutError:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
+@pytest.mark.asyncio
 async def test_dashboard_search_page_renders_results(
     clean_database: str, tmp_path: Path
 ) -> None:

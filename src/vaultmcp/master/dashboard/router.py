@@ -2,16 +2,22 @@
 
 Mounted at the application root. Renders Jinja templates against the
 master's Postgres state. Read-only by design.
+
+When ``MasterConfig.dashboard_password`` is set, every route in this
+router is gated by HTTP Basic auth. When unset, the routes are open and
+rely on the master's localhost bind for protection.
 """
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 from ... import __version__ as _pkg_version
@@ -56,6 +62,11 @@ def build_router(
         "master_url": f"http://{config.http_host}:{config.http_port}",
     }
 
+    # HTTP Basic gate. When no password is configured we install a no-op
+    # dependency so the route signatures stay unchanged.
+    auth_dep = _build_basic_auth_dep(config)
+    deps = [Depends(auth_dep)]
+
     async def _resolve_db() -> Database:
         result = get_db()
         if hasattr(result, "__await__"):
@@ -76,7 +87,7 @@ def build_router(
             for r in rows
         ]
 
-    @router.get("/", response_class=HTMLResponse, include_in_schema=False)
+    @router.get("/", response_class=HTMLResponse, include_in_schema=False, dependencies=deps)
     async def activity(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
@@ -88,6 +99,7 @@ def build_router(
         "/dashboard/activity-rows",
         response_class=HTMLResponse,
         include_in_schema=False,
+        dependencies=deps,
     )
     async def activity_rows(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
@@ -96,7 +108,7 @@ def build_router(
 
     # ---------- /servers ----------
 
-    @router.get("/servers", response_class=HTMLResponse, include_in_schema=False)
+    @router.get("/servers", response_class=HTMLResponse, include_in_schema=False, dependencies=deps)
     async def servers(request: Request) -> HTMLResponse:
         db = await _resolve_db()
         rows = await db.servers_with_activity()
@@ -116,7 +128,7 @@ def build_router(
 
     # ---------- /search ----------
 
-    @router.get("/search", response_class=HTMLResponse, include_in_schema=False)
+    @router.get("/search", response_class=HTMLResponse, include_in_schema=False, dependencies=deps)
     async def search(
         request: Request,
         q: str | None = None,
@@ -160,7 +172,7 @@ def build_router(
 
     # ---------- /audit ----------
 
-    @router.get("/audit", response_class=HTMLResponse, include_in_schema=False)
+    @router.get("/audit", response_class=HTMLResponse, include_in_schema=False, dependencies=deps)
     async def audit(
         request: Request,
         path: str | None = None,
@@ -216,3 +228,55 @@ def build_router(
         )
 
     return router
+
+
+# =============================================================
+# Basic auth dependency
+# =============================================================
+
+
+def _build_basic_auth_dep(config: MasterConfig) -> Callable[..., None]:
+    """Return a FastAPI dependency that enforces Basic auth when configured.
+
+    When ``config.dashboard_password`` is None, the returned dependency
+    is a no-op — the dashboard is open and relies on the master's
+    localhost bind (and any reverse-proxy auth in front of it) for
+    protection. When set, every dashboard route requires
+    ``Authorization: Basic <base64(user:pass)>`` matching the config.
+    """
+    expected_password = config.dashboard_password
+    expected_username = config.dashboard_username
+
+    if expected_password is None:
+        async def _open() -> None:
+            return None
+
+        return _open
+
+    basic = HTTPBasic(realm="vaultmcp-dashboard", auto_error=False)
+
+    async def _gated(
+        creds: HTTPBasicCredentials | None = Depends(basic),
+    ) -> None:
+        if creds is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Dashboard credentials required",
+                headers={"WWW-Authenticate": 'Basic realm="vaultmcp-dashboard"'},
+            )
+        # Constant-time comparison on both fields to avoid leaking
+        # username existence through timing.
+        ok_user = secrets.compare_digest(
+            creds.username.encode("utf-8"), expected_username.encode("utf-8")
+        )
+        ok_pass = secrets.compare_digest(
+            creds.password.encode("utf-8"), expected_password.encode("utf-8")
+        )
+        if not (ok_user and ok_pass):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid dashboard credentials",
+                headers={"WWW-Authenticate": 'Basic realm="vaultmcp-dashboard"'},
+            )
+
+    return _gated
