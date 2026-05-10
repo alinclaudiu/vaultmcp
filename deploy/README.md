@@ -77,9 +77,10 @@ to master, and any other agent's writes will appear in your local mirror.
 
 ## Notes
 
-- v0.2 binds master to localhost. Put it behind a reverse proxy
-  (nginx, Caddy) for cross-host access.
-- Auth (bearer tokens) lands in v0.3. Until then, **don't expose master
-  to untrusted networks**.
-- Backup: `pg_dump` of the `vaultmcp` database + a snapshot of the
-  rendered `wiki/` directory provides two independent recovery paths.
+- The master binds to `127.0.0.1` by default. For agents on remote
+  hosts, put it behind a reverse proxy (nginx, Caddy, Traefik) that
+  terminates TLS and forwards to `127.0.0.1:8080`. The bearer-token
+  auth in master is the authentication boundary; TLS at the proxy
+  is the transport boundary.
+- Backups: see [`BACKUP.md`](BACKUP.md) for the full runbook.
+  Quick version: `pg_dump -Fc vaultmcp` plus a tar of `/srv/vaultmcp/wiki/`.
