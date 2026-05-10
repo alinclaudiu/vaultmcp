@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 import click
 import uvicorn
@@ -82,6 +83,189 @@ def mcp_stdio_cmd() -> None:
     from .mcp_adapter import serve_stdio
 
     asyncio.run(serve_stdio())
+
+
+@cli.command(name="ingest")
+@click.option(
+    "--from",
+    "src_dir",
+    required=True,
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, readable=True, path_type=Path
+    ),
+    help="Root of the source markdown tree (typically a VaultMesh repo).",
+)
+@click.option(
+    "--server-id",
+    default="ingest",
+    help="server_id recorded on every wiki.write the import performs.",
+)
+@click.option(
+    "--app",
+    "app_override",
+    default=None,
+    help="Override the auto-derived app for every page. Default: first "
+    "segment of the path (e.g. apps/webstore/x.md -> 'webstore').",
+)
+@click.option(
+    "--overwrite/--skip-existing",
+    default=False,
+    help="What to do when the target page already exists. Default: skip.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Walk + validate only; no writes.",
+)
+@click.option(
+    "--prefix",
+    default=None,
+    help="Only ingest files whose relative path starts with this prefix.",
+)
+def ingest_cmd(
+    src_dir: Path,
+    server_id: str,
+    app_override: str | None,
+    overwrite: bool,
+    dry_run: bool,
+    prefix: str | None,
+) -> None:
+    """Bulk-import a VaultMesh-style markdown tree into the master.
+
+    Each ``*.md`` file under SRC_DIR becomes a wiki page whose path is
+    the file's path relative to SRC_DIR (e.g.
+    ``apps/webstore/notes.md``). Files that already exist on master
+    are skipped by default; pass ``--overwrite`` to bump them.
+
+    The import is an *operator* action and intentionally bypasses both
+    the bearer-token auth and the path-level ownership rules — the
+    operator running this command is the trust boundary, not an
+    authenticated agent. Validation (size, encoding, frontmatter,
+    secret patterns) still runs; files that fail are skipped and
+    listed at the end so you can fix the source and re-run.
+
+    Run separately per source repo with the appropriate ``--server-id``
+    when migrating multi-repo VaultMesh layouts (each origin server
+    appears in audit rows under its own id).
+    """
+    from ..shared.frontmatter import parse as fm_parse
+    from ..shared.types import Session, WriteInput
+    from .errors import SizeLimitExceeded, ValidationFailed
+    from .render import render_to_disk
+    from .tools import handle_write
+
+    def _derive_app(rel: str) -> str:
+        if app_override:
+            return app_override
+        parts = rel.split("/")
+        if len(parts) >= 2 and parts[0] == "apps":
+            return parts[1]
+        if parts and parts[0]:
+            return parts[0]
+        return "shared"
+
+    async def run() -> None:
+        config = MasterConfig.from_env()
+        db = await Database.connect(config.database_url)
+        try:
+            config.wiki_dir.mkdir(parents=True, exist_ok=True)
+            md_files = sorted(src_dir.rglob("*.md"))
+            if prefix:
+                md_files = [
+                    p
+                    for p in md_files
+                    if p.relative_to(src_dir).as_posix().startswith(prefix)
+                ]
+            click.echo(
+                f"Found {len(md_files)} *.md file(s) under {src_dir}"
+                + (f" (prefix={prefix!r})" if prefix else "")
+            )
+
+            counts = {"imported": 0, "skipped_existing": 0, "skipped_invalid": 0}
+            invalid: list[tuple[Path, str]] = []
+
+            for fp in md_files:
+                rel = fp.relative_to(src_dir).as_posix()
+                content = fp.read_text(encoding="utf-8")
+
+                # Skip if the page already exists and the operator
+                # didn't ask for an overwrite. Cheaper than validating.
+                existing = await db.get_page(rel)
+                if existing is not None and not overwrite:
+                    counts["skipped_existing"] += 1
+                    continue
+
+                if dry_run:
+                    # Validate without committing so the report is accurate.
+                    try:
+                        fm_parse(content)
+                    except Exception as exc:
+                        invalid.append((fp, str(exc)))
+                        counts["skipped_invalid"] += 1
+                        continue
+                    counts["imported"] += 1
+                    continue
+
+                session = Session(
+                    server_id=server_id,
+                    app=_derive_app(rel),
+                    agent_model="ingest",
+                    session_id="",
+                )
+                inp = WriteInput(
+                    path=rel,
+                    content=content,
+                    base_version=(existing.version if existing else None),
+                    session=session,
+                )
+                try:
+                    # Bypass auth + ownership; the operator is the trust
+                    # boundary on this code path.
+                    await handle_write(
+                        db,
+                        config.wiki_dir,
+                        inp,
+                        authed=None,
+                        max_bytes=config.max_file_size_bytes,
+                        ownership=None,
+                    )
+                    counts["imported"] += 1
+                except (ValidationFailed, SizeLimitExceeded) as exc:
+                    invalid.append((fp, str(exc)))
+                    counts["skipped_invalid"] += 1
+                    continue
+
+            click.echo(
+                f"Imported   : {counts['imported']}"
+                + ("  (dry-run)" if dry_run else "")
+            )
+            click.echo(f"Skipped existing: {counts['skipped_existing']}")
+            click.echo(f"Skipped invalid : {counts['skipped_invalid']}")
+            if invalid:
+                click.echo("\nFiles with validation problems:")
+                for path, reason in invalid[:30]:
+                    short = reason if len(reason) <= 100 else reason[:97] + "..."
+                    click.echo(f"  ! {path.relative_to(src_dir)}: {short}")
+                if len(invalid) > 30:
+                    click.echo(f"  ... and {len(invalid) - 30} more.")
+                # Also re-render every successfully-imported page so the
+                # on-disk projection matches the DB after a bulk import.
+                # (handle_write already renders on each call; this is a
+                # belt-and-braces step for cases where the renderer
+                # short-circuited because content was unchanged.)
+            if not dry_run and counts["imported"] > 0:
+                rendered = 0
+                async for page in db.iter_all_pages():
+                    try:
+                        render_to_disk(config.wiki_dir, page.path, page.content)
+                        rendered += 1
+                    except (OSError, ValueError):
+                        pass
+                click.echo(f"Re-rendered {rendered} page(s) to {config.wiki_dir}.")
+        finally:
+            await db.close()
+
+    asyncio.run(run())
 
 
 @cli.command(name="render-all")
