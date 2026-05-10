@@ -39,11 +39,19 @@ class MasterConfig:
     dashboard_username: str = "admin"
     dashboard_password: str | None = None
 
-    # Embedding provider name (e.g. "null/sha-1536"). When None, the
-    # worker doesn't run; embedding_jobs accumulate harmlessly until
-    # an embedder is configured. See vaultmcp.master.embeddings for
-    # the registry of provider names.
+    # Embedding provider name. Recognised values:
+    #   - "null/sha-1536"  : deterministic SHA-256-derived test stub
+    #   - "openai-compat"  : OpenAI-style /embeddings on a configurable
+    #                        base URL (works with litellm, vLLM, OpenAI itself)
+    # When None, the worker doesn't run; embedding_jobs accumulate
+    # harmlessly until an embedder is configured.
     embedding_provider: str | None = None
+
+    # Configuration for "openai-compat" provider (ignored otherwise).
+    embedding_base_url: str | None = None
+    embedding_api_key: str | None = None
+    embedding_model: str | None = None
+    embedding_dim: int = 1536
 
     # Optional path to the ownership/policy YAML config. None means
     # ``/srv/vaultmcp/config.yaml`` if it exists, else no path-level
@@ -86,4 +94,8 @@ class MasterConfig:
             dashboard_username=os.environ.get("VAULTMCP_DASHBOARD_USERNAME", "admin"),
             dashboard_password=os.environ.get("VAULTMCP_DASHBOARD_PASSWORD") or None,
             embedding_provider=os.environ.get("VAULTMCP_EMBEDDING_PROVIDER") or None,
+            embedding_base_url=os.environ.get("VAULTMCP_EMBEDDING_BASE_URL") or None,
+            embedding_api_key=os.environ.get("VAULTMCP_EMBEDDING_API_KEY") or None,
+            embedding_model=os.environ.get("VAULTMCP_EMBEDDING_MODEL") or None,
+            embedding_dim=int(os.environ.get("VAULTMCP_EMBEDDING_DIM", "1536")),
         )

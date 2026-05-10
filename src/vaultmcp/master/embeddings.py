@@ -33,8 +33,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final, Protocol
+
+import httpx
 
 from .db import Database
 
@@ -94,17 +96,127 @@ class NullEmbeddingProvider:
         return out
 
 
-# Registry for ``MasterConfig.embedding_provider`` strings -> class.
-_PROVIDERS: Final[dict[str, type]] = {
-    "null/sha-1536": NullEmbeddingProvider,
-}
+@dataclass
+class OpenAICompatibleEmbeddingProvider:
+    """Embeddings via the OpenAI-style ``POST /embeddings`` shape.
+
+    Works with:
+
+    - OpenAI directly (``base_url=https://api.openai.com/v1``).
+    - litellm proxy (any base URL exposing an OpenAI-compatible
+      ``/embeddings`` endpoint).
+    - Self-hosted gateways that mimic the same shape (vLLM,
+      LocalAI, etc.).
+
+    The same ``EmbeddingProvider`` is used both at write time (worker)
+    and at query time (semantic / hybrid search), so swapping models
+    later is a config change.
+    """
+
+    base_url: str
+    model: str
+    api_key: str | None = None
+    dim: int = 1536
+    timeout_seconds: float = 30.0
+    name: str = field(init=False)
+    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # Surface the model name in audit / dashboard rows so it's
+        # obvious which embedder a given vector came from.
+        self.name = f"openai-compat/{self.model}"
+
+    async def embed(self, text: str) -> list[float]:
+        client = self._get_client()
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        url = f"{self.base_url.rstrip('/')}/embeddings"
+        resp = await client.post(
+            url,
+            headers=headers,
+            json={"model": self.model, "input": text},
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        try:
+            vec = payload["data"][0]["embedding"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(
+                f"Unexpected embeddings response shape from {url}: {payload!r}"
+            ) from exc
+
+        if len(vec) != self.dim:
+            raise RuntimeError(
+                f"Model {self.model!r} returned {len(vec)}-d vectors, "
+                f"expected {self.dim}. Either pick a model with that "
+                "dimension, or update the embeddings.embedding column "
+                "(and the schema constant) and rebuild."
+            )
+        return [float(x) for x in vec]
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout_seconds, connect=10.0)
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
 
-def get_provider(name: str) -> EmbeddingProvider:
-    """Resolve a provider by string. Raises :class:`KeyError` if unknown."""
-    cls = _PROVIDERS[name]
-    instance = cls()
-    return instance  # type: ignore[return-value]
+# Lookup table for the provider-name string in ``MasterConfig``.
+# Each entry decides what `get_provider(config)` returns; some entries
+# instantiate without arguments (Null), others read additional config
+# fields (OpenAI-compatible).
+_NULL_PROVIDER_NAME: Final[str] = "null/sha-1536"
+_OPENAI_COMPAT_NAME: Final[str] = "openai-compat"
+
+
+def get_provider_from_name(name: str) -> EmbeddingProvider:
+    """Resolve a parameter-less provider by name (back-compat for tests)."""
+    if name == _NULL_PROVIDER_NAME:
+        return NullEmbeddingProvider()  # type: ignore[return-value]
+    raise KeyError(name)
+
+
+# Kept under the old name so existing code continues to work; the
+# resolver uses the slim parameter-less form. Real providers go
+# through :func:`build_provider`.
+get_provider = get_provider_from_name
+
+
+def build_provider(
+    *,
+    name: str,
+    base_url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    dim: int = 1536,
+) -> EmbeddingProvider:
+    """Construct a provider from config-shaped fields.
+
+    Centralising instantiation here keeps server.py free of
+    provider-specific knobs and lets us add new providers (Cohere,
+    Voyage, local Sentence-Transformers) by extending the dispatch
+    below.
+    """
+    if name == _NULL_PROVIDER_NAME:
+        return NullEmbeddingProvider()  # type: ignore[return-value]
+    if name == _OPENAI_COMPAT_NAME:
+        if not base_url or not model:
+            raise ValueError(
+                f"Provider {name!r} requires VAULTMCP_EMBEDDING_BASE_URL "
+                "and VAULTMCP_EMBEDDING_MODEL"
+            )
+        return OpenAICompatibleEmbeddingProvider(
+            base_url=base_url, model=model, api_key=api_key, dim=dim
+        )
+    raise KeyError(f"Unknown embedding provider: {name!r}")
 
 
 # =============================================================

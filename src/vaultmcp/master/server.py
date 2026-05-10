@@ -31,7 +31,7 @@ from .auth import AuthenticatedServer, hash_token, parse_bearer
 from .config import MasterConfig
 from .dashboard import build_router as build_dashboard_router
 from .db import Database
-from .embeddings import EmbeddingWorker, get_provider
+from .embeddings import EmbeddingWorker, build_provider
 from .ownership import OwnershipRules, load_rules
 from .sse import EventBroadcaster, format_sse
 from .tools import ConflictError, ToolError, call_handler_by_name
@@ -82,12 +82,15 @@ def build_app(config: MasterConfig) -> FastAPI:
         embedding_provider = None
         if config.embedding_provider:
             try:
-                embedding_provider = get_provider(config.embedding_provider)
-            except KeyError:
-                LOG.error(
-                    "Unknown embedding provider %r; worker disabled",
-                    config.embedding_provider,
+                embedding_provider = build_provider(
+                    name=config.embedding_provider,
+                    base_url=config.embedding_base_url,
+                    model=config.embedding_model,
+                    api_key=config.embedding_api_key,
+                    dim=config.embedding_dim,
                 )
+            except (KeyError, ValueError) as exc:
+                LOG.error("Embedding provider misconfigured: %s; worker disabled", exc)
             else:
                 embedding_worker = EmbeddingWorker(db=db, provider=embedding_provider)
                 await embedding_worker.start()
@@ -107,6 +110,13 @@ def build_app(config: MasterConfig) -> FastAPI:
         finally:
             if embedding_worker is not None:
                 await embedding_worker.stop()
+            if embedding_provider is not None:
+                aclose = getattr(embedding_provider, "aclose", None)
+                if aclose is not None:
+                    try:
+                        await aclose()
+                    except Exception:
+                        pass
             await broadcaster.stop()
             await db.close()
 
