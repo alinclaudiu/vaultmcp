@@ -470,6 +470,51 @@ class Database:
             client_ip,
         )
 
+    # ---------- audit (read) ----------
+
+    async def list_audit(
+        self,
+        *,
+        path: str | None = None,
+        since: datetime | None = None,
+        server_id: str | None = None,
+        app: str | None = None,
+        operation: str | None = None,
+        limit: int = 100,
+    ) -> list[asyncpg.Record]:
+        """Return audit rows matching the given filters, newest first."""
+        clauses = ["TRUE"]
+        params: list[Any] = []
+
+        if path is not None:
+            params.append(path)
+            clauses.append(f"path = ${len(params)}")
+        if since is not None:
+            params.append(since)
+            clauses.append(f"ts >= ${len(params)}")
+        if server_id is not None:
+            params.append(server_id)
+            clauses.append(f"server_id = ${len(params)}")
+        if app is not None:
+            params.append(app)
+            clauses.append(f"app = ${len(params)}")
+        if operation is not None:
+            params.append(operation)
+            clauses.append(f"operation = ${len(params)}")
+
+        params.append(limit)
+        sql = (
+            "SELECT id, ts, operation, path, server_id, app, agent_model, "
+            "prompt_hash, version_before, version_after, outcome, error_code, "
+            "client_ip "
+            "FROM audit WHERE "
+            + " AND ".join(clauses)
+            + f" ORDER BY ts DESC, id DESC LIMIT ${len(params)}"
+        )
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(sql, *params)
+
     # ---------- servers (auth) ----------
 
     async def add_server(

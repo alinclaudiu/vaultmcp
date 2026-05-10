@@ -159,6 +159,46 @@ class LogEntryOutput(BaseModel):
 
 
 # =============================================================
+# wiki.audit
+# =============================================================
+
+
+class AuditInput(BaseModel):
+    """Filters for ``wiki.audit``.
+
+    All fields are optional. ``path`` matches exactly (use a follow-up
+    tool with prefix support if needed); ``since`` filters by ``ts``.
+    """
+
+    path: str | None = None
+    since: datetime | None = None
+    server_id: str | None = None
+    app: str | None = None
+    operation: Operation | None = None
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class AuditEntry(BaseModel):
+    id: int
+    ts: datetime
+    operation: Operation
+    path: str | None = None
+    server_id: str
+    app: str
+    agent_model: str | None = None
+    prompt_hash: str | None = None
+    version_before: int | None = None
+    version_after: int | None = None
+    outcome: Outcome
+    error_code: str | None = None
+    client_ip: str | None = None
+
+
+class AuditOutput(BaseModel):
+    entries: list[AuditEntry]
+
+
+# =============================================================
 # wiki.subscribe (SSE streaming)
 # =============================================================
 

@@ -109,6 +109,29 @@ class MasterClient:
     async def append_log(self, entry: dict[str, Any]) -> dict[str, Any]:
         return await self._call("wiki.append_log", entry)
 
+    async def audit(
+        self,
+        *,
+        path: str | None = None,
+        since: datetime | None = None,
+        server_id: str | None = None,
+        app: str | None = None,
+        operation: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        args: dict[str, Any] = {"limit": limit}
+        if path is not None:
+            args["path"] = path
+        if since is not None:
+            args["since"] = since.isoformat()
+        if server_id is not None:
+            args["server_id"] = server_id
+        if app is not None:
+            args["app"] = app
+        if operation is not None:
+            args["operation"] = operation
+        return await self._call("wiki.audit", args)
+
     # ---------- subscribe (SSE) ----------
 
     async def subscribe(

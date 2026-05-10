@@ -15,6 +15,9 @@ from typing import Any
 
 from ..shared import frontmatter as fm_mod
 from ..shared.types import (
+    AuditEntry,
+    AuditInput,
+    AuditOutput,
     ListEntry,
     ListInput,
     ListOutput,
@@ -47,6 +50,7 @@ __all__ = [
     "ValidationFailed",
     "call_handler_by_name",
     "handle_append_log",
+    "handle_audit",
     "handle_list",
     "handle_read",
     "handle_write",
@@ -193,6 +197,36 @@ async def handle_list(db: Database, inp: ListInput) -> ListOutput:
     )
 
 
+async def handle_audit(db: Database, inp: AuditInput) -> AuditOutput:
+    rows = await db.list_audit(
+        path=inp.path,
+        since=inp.since,
+        server_id=inp.server_id,
+        app=inp.app,
+        operation=inp.operation,
+        limit=inp.limit,
+    )
+    entries = [
+        AuditEntry(
+            id=r["id"],
+            ts=r["ts"],
+            operation=r["operation"],
+            path=r["path"],
+            server_id=r["server_id"],
+            app=r["app"],
+            agent_model=r["agent_model"],
+            prompt_hash=r["prompt_hash"],
+            version_before=r["version_before"],
+            version_after=r["version_after"],
+            outcome=r["outcome"],
+            error_code=r["error_code"],
+            client_ip=str(r["client_ip"]) if r["client_ip"] is not None else None,
+        )
+        for r in rows
+    ]
+    return AuditOutput(entries=entries)
+
+
 async def handle_append_log(
     db: Database,
     inp: LogEntryInput,
@@ -249,5 +283,7 @@ async def call_handler_by_name(
         return (
             await handle_append_log(db, LogEntryInput(**args), authed=authed)
         ).model_dump(mode="json")
+    if name == "wiki.audit":
+        return (await handle_audit(db, AuditInput(**args))).model_dump(mode="json")
 
     raise ToolError(f"Unknown tool: {name}", status=400)
