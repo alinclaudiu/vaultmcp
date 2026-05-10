@@ -1,0 +1,15 @@
+# Run as a user-scope service: systemctl --user enable --now vaultmcp-agent
+[Unit]
+Description=VaultMCP per-server agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/vaultmcp/agent.env
+ExecStart=%h/.local/bin/vaultmcp-agent run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

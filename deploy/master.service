@@ -1,0 +1,23 @@
+[Unit]
+Description=VaultMCP master MCP server
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=vaultmcp
+Group=vaultmcp
+EnvironmentFile=/etc/vaultmcp/master.env
+ExecStart=/usr/local/bin/vaultmcp-master serve
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vaultmcp
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

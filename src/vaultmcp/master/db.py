@@ -1,0 +1,452 @@
+"""Async Postgres access for the master.
+
+Wraps :mod:`asyncpg` with a small set of typed helpers that map directly
+to the master's MCP tool surface. Every write is wrapped in a transaction
+that:
+
+1. Validates the version etag (optimistic concurrency).
+2. INSERTs / UPDATEs the page row, bumping ``version`` and pulling a fresh
+   ``global_version`` from the sequence.
+3. INSERTs an event row (which fires the LISTEN/NOTIFY trigger).
+4. INSERTs an audit row.
+
+The renderer is called outside the DB transaction by the caller (a write
+to disk that fails after a successful DB commit is logged but does not
+roll back — the DB is the source of truth).
+"""
+
+from __future__ import annotations
+
+import json
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, AsyncIterator
+
+import asyncpg
+
+
+# =============================================================
+# Page row + result types
+# =============================================================
+
+
+@dataclass
+class PageRow:
+    path: str
+    content: str
+    version: int
+    global_version: int
+    metadata: dict[str, Any]
+    type: str
+    owners: list[str]
+    updated: datetime
+    last_writer_server: str
+    last_writer_app: str
+    last_writer_session: str
+
+    @classmethod
+    def from_record(cls, r: asyncpg.Record) -> "PageRow":
+        return cls(
+            path=r["path"],
+            content=r["content"],
+            version=r["version"],
+            global_version=r["global_version"],
+            metadata=r["metadata"] or {},
+            type=r["type"],
+            owners=list(r["owners"] or []),
+            updated=r["updated"],
+            last_writer_server=r["last_writer_server"],
+            last_writer_app=r["last_writer_app"],
+            last_writer_session=r["last_writer_session"],
+        )
+
+
+@dataclass
+class WriteResult:
+    """Returned by :meth:`Database.write_page` on success."""
+
+    path: str
+    version: int
+    global_version: int
+    applied_at: datetime
+
+
+@dataclass
+class ConflictResult:
+    """Returned when the supplied ``base_version`` doesn't match current."""
+
+    current_version: int
+    current_content: str
+    last_writer: str  # server_id of the winner
+
+
+# =============================================================
+# Database wrapper
+# =============================================================
+
+
+class Database:
+    """Thin wrapper over an :class:`asyncpg.Pool`."""
+
+    def __init__(self, pool: asyncpg.Pool):
+        self.pool = pool
+
+    @classmethod
+    async def connect(cls, dsn: str, *, min_size: int = 1, max_size: int = 10) -> "Database":
+        pool = await asyncpg.create_pool(
+            dsn=dsn,
+            min_size=min_size,
+            max_size=max_size,
+            init=cls._init_connection,
+        )
+        if pool is None:
+            raise RuntimeError("asyncpg.create_pool returned None")
+        return cls(pool=pool)
+
+    @staticmethod
+    async def _init_connection(conn: asyncpg.Connection) -> None:
+        # JSONB columns come back as Python dicts/lists; ergonomic.
+        await conn.set_type_codec(
+            "jsonb",
+            encoder=json.dumps,
+            decoder=json.loads,
+            schema="pg_catalog",
+        )
+
+    async def close(self) -> None:
+        await self.pool.close()
+
+    async def apply_schema(self, schema_path: Path) -> None:
+        sql = schema_path.read_text(encoding="utf-8")
+        async with self.pool.acquire() as conn:
+            await conn.execute(sql)
+
+    # ---------- pages ----------
+
+    async def get_page(self, path: str) -> PageRow | None:
+        """Fetch a single page; ``None`` if it doesn't exist."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM pages WHERE path = $1",
+                path,
+            )
+        return PageRow.from_record(row) if row else None
+
+    async def list_pages(
+        self,
+        *,
+        prefix: str | None = None,
+        type_filter: str | None = None,
+        updated_since: datetime | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> tuple[list[PageRow], str | None]:
+        """Paginated list. Cursor is the last seen ``global_version`` (string)."""
+        clauses = ["TRUE"]
+        params: list[Any] = []
+
+        if prefix:
+            params.append(prefix + "%")
+            clauses.append(f"path LIKE ${len(params)}")
+        if type_filter:
+            params.append(type_filter)
+            clauses.append(f"type = ${len(params)}")
+        if updated_since:
+            params.append(updated_since)
+            clauses.append(f"updated >= ${len(params)}")
+        if cursor:
+            params.append(int(cursor))
+            clauses.append(f"global_version < ${len(params)}")
+
+        params.append(limit)
+        sql = (
+            "SELECT * FROM pages WHERE "
+            + " AND ".join(clauses)
+            + f" ORDER BY global_version DESC LIMIT ${len(params)}"
+        )
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        pages = [PageRow.from_record(r) for r in rows]
+        next_cursor = (
+            str(pages[-1].global_version) if len(pages) == limit else None
+        )
+        return pages, next_cursor
+
+    async def write_page(
+        self,
+        *,
+        path: str,
+        content: str,
+        base_version: int | None,
+        metadata: dict[str, Any],
+        type_: str,
+        owners: list[str],
+        updated: datetime,
+        last_writer_server: str,
+        last_writer_app: str,
+        last_writer_session: str,
+        agent_model: str | None = None,
+        prompt_hash: str | None = None,
+        client_ip: str | None = None,
+    ) -> WriteResult | ConflictResult:
+        """Insert or update a page atomically; returns conflict if version mismatched.
+
+        Atomicity guarantees (one transaction):
+        - Bumps ``version`` and ``global_version``.
+        - Inserts an event row (NOTIFY fires after COMMIT — correct semantic).
+        - Inserts an audit row.
+
+        If ``base_version`` differs from the current row's version, the
+        transaction is rolled back and a :class:`ConflictResult` is returned.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                existing = await conn.fetchrow(
+                    "SELECT version, content, last_writer_server FROM pages "
+                    "WHERE path = $1 FOR UPDATE",
+                    path,
+                )
+
+                if existing is None:
+                    # New page — base_version must be None.
+                    if base_version is not None:
+                        await self._insert_audit(
+                            conn,
+                            operation="write",
+                            path=path,
+                            server_id=last_writer_server,
+                            app=last_writer_app,
+                            agent_model=agent_model,
+                            prompt_hash=prompt_hash,
+                            version_before=None,
+                            version_after=None,
+                            outcome="conflict",
+                            error_code="not_found_but_base_version_supplied",
+                            client_ip=client_ip,
+                        )
+                        return ConflictResult(
+                            current_version=0,
+                            current_content="",
+                            last_writer="",
+                        )
+                    new_version = 1
+                else:
+                    if base_version != existing["version"]:
+                        await self._insert_audit(
+                            conn,
+                            operation="write",
+                            path=path,
+                            server_id=last_writer_server,
+                            app=last_writer_app,
+                            agent_model=agent_model,
+                            prompt_hash=prompt_hash,
+                            version_before=existing["version"],
+                            version_after=None,
+                            outcome="conflict",
+                            client_ip=client_ip,
+                        )
+                        return ConflictResult(
+                            current_version=existing["version"],
+                            current_content=existing["content"],
+                            last_writer=existing["last_writer_server"],
+                        )
+                    new_version = existing["version"] + 1
+
+                gv = await conn.fetchval("SELECT nextval('global_version_seq')")
+
+                await conn.execute(
+                    """
+                    INSERT INTO pages
+                        (path, content, version, global_version, metadata, type,
+                         owners, updated, last_writer_server, last_writer_app,
+                         last_writer_session)
+                    VALUES
+                        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ON CONFLICT (path) DO UPDATE SET
+                        content = EXCLUDED.content,
+                        version = EXCLUDED.version,
+                        global_version = EXCLUDED.global_version,
+                        metadata = EXCLUDED.metadata,
+                        type = EXCLUDED.type,
+                        owners = EXCLUDED.owners,
+                        updated = EXCLUDED.updated,
+                        last_writer_server = EXCLUDED.last_writer_server,
+                        last_writer_app = EXCLUDED.last_writer_app,
+                        last_writer_session = EXCLUDED.last_writer_session
+                    """,
+                    path,
+                    content,
+                    new_version,
+                    gv,
+                    metadata,
+                    type_,
+                    owners,
+                    updated,
+                    last_writer_server,
+                    last_writer_app,
+                    last_writer_session,
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO events (event_type, path, global_version, payload)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    "PageChanged",
+                    path,
+                    gv,
+                    {"version": new_version},
+                )
+
+                await self._insert_audit(
+                    conn,
+                    operation="write",
+                    path=path,
+                    server_id=last_writer_server,
+                    app=last_writer_app,
+                    agent_model=agent_model,
+                    prompt_hash=prompt_hash,
+                    version_before=existing["version"] if existing else None,
+                    version_after=new_version,
+                    outcome="ok",
+                    client_ip=client_ip,
+                )
+
+                return WriteResult(
+                    path=path,
+                    version=new_version,
+                    global_version=gv,
+                    applied_at=datetime.now(tz=timezone.utc),
+                )
+
+    # ---------- log ----------
+
+    async def append_log(
+        self,
+        *,
+        timestamp: datetime,
+        server_id: str,
+        app: str,
+        modules_touched: list[str],
+        integrations_updated: list[str],
+        notable: list[str],
+    ) -> tuple[int, int]:
+        """Append to the session log. Returns ``(id, global_version)``."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                gv = await conn.fetchval("SELECT nextval('global_version_seq')")
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO log_entries
+                        (ts, server_id, app, modules_touched,
+                         integrations_updated, notable, global_version)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING id
+                    """,
+                    timestamp,
+                    server_id,
+                    app,
+                    modules_touched,
+                    integrations_updated,
+                    notable,
+                    gv,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO events (event_type, path, global_version, payload)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    "LogAppended",
+                    None,
+                    gv,
+                    {"id": row["id"], "server_id": server_id, "app": app},
+                )
+                await self._insert_audit(
+                    conn,
+                    operation="append_log",
+                    path=None,
+                    server_id=server_id,
+                    app=app,
+                    agent_model=None,
+                    prompt_hash=None,
+                    version_before=None,
+                    version_after=None,
+                    outcome="ok",
+                    client_ip=None,
+                )
+                return row["id"], gv
+
+    # ---------- events / streaming ----------
+
+    async def events_since(
+        self, since_global_version: int, *, limit: int = 1000
+    ) -> list[asyncpg.Record]:
+        """Return events with ``global_version > since`` for catch-up."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """
+                SELECT id, ts, event_type, path, global_version, payload
+                FROM events
+                WHERE global_version > $1
+                ORDER BY global_version ASC
+                LIMIT $2
+                """,
+                since_global_version,
+                limit,
+            )
+
+    @asynccontextmanager
+    async def listen(self, channel: str) -> AsyncIterator[asyncpg.Connection]:
+        """Acquire a dedicated connection and LISTEN on a channel.
+
+        Caller installs ``add_listener`` callbacks on the yielded connection.
+        """
+        conn = await self.pool.acquire()
+        try:
+            await conn.execute(f"LISTEN {channel}")
+            yield conn
+        finally:
+            await conn.execute(f"UNLISTEN {channel}")
+            await self.pool.release(conn)
+
+    # ---------- audit ----------
+
+    async def _insert_audit(
+        self,
+        conn: asyncpg.Connection,
+        *,
+        operation: str,
+        path: str | None,
+        server_id: str,
+        app: str,
+        agent_model: str | None,
+        prompt_hash: str | None,
+        version_before: int | None,
+        version_after: int | None,
+        outcome: str,
+        error_code: str | None = None,
+        client_ip: str | None = None,
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO audit
+                (operation, path, server_id, app, agent_model, prompt_hash,
+                 version_before, version_after, outcome, error_code, client_ip)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            """,
+            operation,
+            path,
+            server_id,
+            app,
+            agent_model,
+            prompt_hash,
+            version_before,
+            version_after,
+            outcome,
+            error_code,
+            client_ip,
+        )

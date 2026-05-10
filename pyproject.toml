@@ -1,0 +1,103 @@
+[project]
+name = "vaultmcp"
+version = "0.2.0.dev0"
+description = "MCP-first knowledge mesh for AI agents — master + agent reference implementation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "VaultMCP contributors" }
+]
+keywords = ["mcp", "llm", "knowledge-management", "wiki", "pgvector", "postgres", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
+dependencies = [
+    # MCP protocol
+    "mcp>=1.0.0",
+    # Async Postgres
+    "asyncpg>=0.29.0",
+    # HTTP / sidecar
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    # Validation / schemas
+    "pydantic>=2.6.0",
+    # Frontmatter parsing
+    "pyyaml>=6.0",
+    # File watching (agent)
+    "watchdog>=4.0.0",
+    # CLI
+    "click>=8.1.0",
+    # Structured logging
+    "structlog>=24.1.0",
+    # HTTP client for SSE in agent
+    "httpx[http2]>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-postgresql>=6.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "types-pyyaml",
+]
+
+[project.scripts]
+vaultmcp-master = "vaultmcp.master.__main__:main"
+vaultmcp-agent = "vaultmcp.agent.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/alinclaudiu/vaultmcp"
+Documentation = "https://github.com/alinclaudiu/vaultmcp/blob/main/DESIGN.md"
+Repository = "https://github.com/alinclaudiu/vaultmcp"
+Issues = "https://github.com/alinclaudiu/vaultmcp/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vaultmcp"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",     # pycodestyle + pyflakes
+    "I",                # isort
+    "B",                # flake8-bugbear
+    "UP",               # pyupgrade
+    "N",                # pep8-naming
+    "RUF",              # ruff-specific
+]
+ignore = [
+    "E501",  # line length is enforced by formatter
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-ra --strict-markers"
