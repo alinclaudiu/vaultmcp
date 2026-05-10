@@ -310,6 +310,121 @@ async def test_dashboard_audit_page_filters_by_outcome(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_vectors_page(
+    clean_database: str, tmp_path: Path
+) -> None:
+    """The /vectors page renders neighbors when an embedding exists,
+    and a clear empty-state when it doesn't."""
+    from vaultmcp.master.config import MasterConfig
+    from vaultmcp.master.server import build_app
+
+    port = _free_port()
+    wiki_dir = tmp_path / "master_wiki"
+    wiki_dir.mkdir()
+    config = MasterConfig(
+        database_url=clean_database,
+        wiki_dir=wiki_dir,
+        embedding_provider="null/sha-1536",
+    )
+    app = build_app(config)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, host="127.0.0.1", port=port, log_level="warning", lifespan="on"
+        )
+    )
+    task = asyncio.create_task(server.serve())
+    try:
+        deadline = time.monotonic() + 10
+        while not getattr(server, "started", False):
+            if time.monotonic() > deadline:
+                raise AssertionError("master never started")
+            await asyncio.sleep(0.05)
+
+        page = (
+            "---\n"
+            "title: A\n"
+            "type: app\n"
+            "owners: [testapp]\n"
+            "updated: 2026-05-10\n"
+            "---\n\n"
+            "alpha\n"
+        )
+        page2 = page.replace("title: A\n", "title: B\n").replace("alpha", "beta")
+        session = {
+            "server_id": "server-test",
+            "app": "testapp",
+            "agent_model": "pytest",
+            "session_id": "",
+        }
+        base = f"http://127.0.0.1:{port}"
+        async with httpx.AsyncClient(base_url=base) as client:
+            await client.post(
+                "/mcp/call",
+                json={
+                    "tool": "wiki.write",
+                    "args": {
+                        "path": "apps/testapp/a.md",
+                        "content": page,
+                        "base_version": None,
+                        "session": session,
+                    },
+                },
+            )
+            await client.post(
+                "/mcp/call",
+                json={
+                    "tool": "wiki.write",
+                    "args": {
+                        "path": "apps/testapp/b.md",
+                        "content": page2,
+                        "base_version": None,
+                        "session": session,
+                    },
+                },
+            )
+
+            # Empty form
+            resp = await client.get("/vectors")
+            assert resp.status_code == 200
+            assert "Vector explorer" in resp.text
+
+            # Non-existent path -> "no embedding" empty state
+            resp = await client.get("/vectors", params={"path": "missing.md"})
+            assert resp.status_code == 200
+            assert "No embedding" in resp.text
+
+            # Wait for the worker to embed both pages
+            import asyncpg as _ap
+            conn = await _ap.connect(clean_database)
+            try:
+                edge = time.monotonic() + 10
+                while time.monotonic() < edge:
+                    n = await conn.fetchval("SELECT count(*) FROM embeddings")
+                    if n >= 2:
+                        break
+                    await asyncio.sleep(0.1)
+            finally:
+                await conn.close()
+
+            # Real query — A's neighbor should be B (the only other doc).
+            resp = await client.get(
+                "/vectors", params={"path": "apps/testapp/a.md"}
+            )
+            assert resp.status_code == 200
+            assert "apps/testapp/b.md" in resp.text
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(task, timeout=5)
+        except TimeoutError:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
+@pytest.mark.asyncio
 async def test_dashboard_renders_activity_after_writes(
     clean_database: str, tmp_path: Path
 ) -> None:

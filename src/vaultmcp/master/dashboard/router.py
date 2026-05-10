@@ -170,6 +170,44 @@ def build_router(
             },
         )
 
+    # ---------- /vectors ----------
+
+    @router.get("/vectors", response_class=HTMLResponse, include_in_schema=False, dependencies=deps)
+    async def vectors(request: Request, path: str | None = None) -> HTMLResponse:
+        ctx: dict[str, object] = {
+            **base_ctx,
+            "active": "vectors",
+            "path": path,
+            "default_limit": 10,
+            "neighbors": [],
+            "missing": False,
+        }
+        if path:
+            db = await _resolve_db()
+            # If the requested page has no embedding, neighbors_of returns
+            # []; we distinguish "no embedding for this path" from "embedding
+            # exists but it's the only one in the table" with a presence
+            # check on the embeddings row itself.
+            async with db.pool.acquire() as conn:
+                has_embedding = await conn.fetchval(
+                    "SELECT 1 FROM embeddings WHERE path = $1", path
+                )
+            if not has_embedding:
+                ctx["missing"] = True
+            else:
+                rows = await db.neighbors_of(path=path, limit=10)
+                ctx["neighbors"] = [
+                    SimpleNamespace(
+                        path=r["path"],
+                        type=r["type"],
+                        updated=r["updated"],
+                        version=r["version"],
+                        similarity=float(r["similarity"] or 0.0),
+                    )
+                    for r in rows
+                ]
+        return templates.TemplateResponse(request, "vectors.html", ctx)
+
     # ---------- /audit ----------
 
     @router.get("/audit", response_class=HTMLResponse, include_in_schema=False, dependencies=deps)

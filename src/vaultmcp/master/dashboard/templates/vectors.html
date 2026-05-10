@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Vectors{% endblock %}
+{% block content %}
+<section>
+  <h2 style="margin-bottom: 0.25rem">Vector explorer</h2>
+  <p class="muted">
+    Enter a page path; the master returns its top-{{ default_limit }} closest
+    neighbors by cosine distance over the configured embedding provider.
+    Useful for spotting orphans (pages with no close neighbors), validating
+    embedding quality after a model change, and seeing what the LLM
+    considers semantically related.
+  </p>
+
+  <form method="get" action="/vectors">
+    <fieldset class="grid">
+      <label>
+        Page path
+        <input type="text" name="path" value="{{ path or '' }}"
+               placeholder="apps/webstore/notes.md" autofocus required>
+      </label>
+    </fieldset>
+    <button type="submit">Find neighbors</button>
+  </form>
+
+  {% if path %}
+    {% if missing %}
+    <article>
+      <p class="muted">No embedding for <code>{{ path }}</code> yet.</p>
+      <p class="muted">Either the page doesn't exist, or the embedding worker
+         hasn't drained the queue. Check the embedding_jobs table or wait a
+         moment.</p>
+    </article>
+    {% elif neighbors %}
+    <p class="muted">{{ neighbors|length }} neighbor{{ 's' if neighbors|length != 1 else '' }} of <code>{{ path }}</code>.</p>
+    <table class="compact striped">
+      <thead>
+        <tr>
+          <th>Path</th>
+          <th>Type</th>
+          <th>Updated</th>
+          <th>Similarity</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for n in neighbors %}
+        <tr>
+          <td><code class="path">{{ n.path }}</code></td>
+          <td><span class="pill">{{ n.type }}</span></td>
+          <td><span class="muted" title="{{ n.updated.isoformat() }}">{{ n.updated.strftime('%Y-%m-%d') }}</span></td>
+          <td class="muted">{{ '%.3f'|format(n.similarity) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <article class="muted">
+      <code>{{ path }}</code> has an embedding but no neighbors — there are no
+      other pages with embeddings yet, so similarity comparisons aren't possible.
+    </article>
+    {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

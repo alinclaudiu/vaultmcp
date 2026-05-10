@@ -584,6 +584,30 @@ class Database:
 
     # ---------- search ----------
 
+    async def neighbors_of(
+        self, *, path: str, limit: int = 10
+    ) -> list[asyncpg.Record]:
+        """Return the closest pages (by cosine) to ``path``'s embedding.
+
+        Excludes ``path`` itself. Returns ``[]`` when ``path`` has no
+        embedding yet (e.g. the worker hasn't drained the queue).
+        """
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """
+                SELECT p.path, p.type, p.updated, p.version,
+                       1 - (e.embedding <=> base.embedding) AS similarity
+                FROM embeddings e
+                JOIN pages p ON p.path = e.path
+                JOIN embeddings base ON base.path = $1
+                WHERE e.path <> $1
+                ORDER BY e.embedding <=> base.embedding ASC
+                LIMIT $2
+                """,
+                path,
+                limit,
+            )
+
     async def search_pages_semantic(
         self,
         *,
