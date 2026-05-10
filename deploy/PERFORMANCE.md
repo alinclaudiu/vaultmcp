@@ -60,6 +60,41 @@ script uses `_free_port()`); a real concurrent-load runner would
 share the master connection pool, which lands when the project gets
 a `bench/concurrent.py` companion.
 
+## Concurrent load — 8 workers × 25 ops
+
+Run via:
+
+```bash
+VAULTMCP_TEST_DATABASE_URL=postgres://… \
+  python bench/parallel.py --concurrency 8 --writes-per-worker 25
+```
+
+| Operation | p50 | p95 | p99 | aggregate throughput |
+|---|---:|---:|---:|---:|
+| `wiki.write` (8×25 = 200) | 28.9 ms | 33.8 ms | 303.7 ms | ~190 writes/s |
+| `wiki.read` (8×25 = 200) | 16.8 ms | 19.9 ms | 69.9 ms | ~406 reads/s |
+
+Two observations to act on under prod load:
+
+1. **Write throughput barely scales with concurrency.** Single-client
+   ~175 w/s vs 8-client ~190 w/s — the bottleneck is the
+   `SELECT … FOR UPDATE` inside `write_page`. Two writers contending
+   for the same path serialise; two writers on different paths still
+   share the global_version_seq nextval and the events INSERT path.
+   Real-world write rate is bounded by Postgres's write-WAL throughput
+   on the master + the wiki render fsync. To push beyond, the next
+   step is a `synchronous_commit=off` audit on the audit/events
+   inserts (acceptable trade for those rows).
+2. **Read throughput also barely scales** because reads are already
+   point-lookups on `pages.path` (PK). Single-client = 370 r/s,
+   8-client = 406 r/s. Latency is dominated by FastAPI/uvicorn
+   request handling, not Postgres. Multi-process uvicorn
+   (`--workers 4`) would help on a heavily read-loaded master;
+   single-process is fine for the typical "5-10 servers" profile.
+3. **Tail latency on writes** (p99 = 304 ms vs p50 = 29 ms) is mostly
+   the first-write contention spike — eight workers grabbing
+   FOR UPDATE on cold cache. Steady-state p99 stays close to p95.
+
 ## What's not in the baseline yet
 
 - Semantic / hybrid search numbers (need an embedding provider that's
