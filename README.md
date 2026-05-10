@@ -119,18 +119,93 @@ Extending the DB with other apps: [`docs/03-extensibility.md`](docs/03-extensibi
 
 ## Status
 
-**v0.0.1 — design release.** No code yet. This repo currently ships:
+**v0.6.0 — Hardening release.** All ROADMAP phases v0.1 → v0.6 land:
 
-- A complete vision (this README)
-- A full implementation-ready design ([`DESIGN.md`](DESIGN.md))
-- Four architecture diagrams ([`docs/diagrams/`](docs/diagrams/))
-- A "why" essay ([`docs/01-vision.md`](docs/01-vision.md))
-- A comparison ([`docs/02-vs-vaultmesh.md`](docs/02-vs-vaultmesh.md))
-- An extensibility guide ([`docs/03-extensibility.md`](docs/03-extensibility.md))
-- A dashboard guide ([`docs/04-dashboard.md`](docs/04-dashboard.md))
-- A roadmap ([`ROADMAP.md`](ROADMAP.md))
+| Phase | What works | Tag |
+|---|---|---|
+| v0.2 | master + per-server agent + real-time SSE + offline write queue | `v0.2.0` |
+| v0.3 | bearer-token auth + per-server-app + path-level ownership + validation (size/encoding/frontmatter/secrets) + `wiki.audit` | `v0.4.0` |
+| v0.4 | lexical / semantic / hybrid search via Reciprocal Rank Fusion + pgvector embedding worker + 5-page HTMX dashboard with HTTP Basic gate + SSE-driven live activity | `v0.4.0` / `v0.4.1` |
+| v0.5 | `ext.register / declare_table / query / exec / embed / emit_event` for other apps to share the DB; real Postgres-role isolation per extension | `v0.5.0` / `v0.6.0` |
+| v0.6 | backup runbook, perf baseline, graceful-shutdown fix, role-isolation hardening | `v0.6.0` |
 
-Phase 1 (working skeleton) is the next milestone. Estimated 4 focused engineer-weeks to v0.1 (a usable internal deployment).
+**Tests:** 143 passing (113 unit + 30 e2e against a real Postgres + pgvector).
+
+**Perf baseline** (single-client sequential, dev box, [`deploy/PERFORMANCE.md`](deploy/PERFORMANCE.md)):
+
+| Op | p50 | p95 | throughput |
+|---|---:|---:|---:|
+| `wiki.write` | 5.6 ms | 6.4 ms | ~175 writes/s |
+| `wiki.read` | 2.5 ms | 3.6 ms | ~371 reads/s |
+| `wiki.search` (lexical) | 4.7 ms | 5.3 ms | ~218 searches/s |
+
+**Production status:** v0.6.0 has been driven through a real first-deploy: master on one host, agent on a remote LAN host, propagation verified end-to-end. Deployment recipe at [`deploy/README.md`](deploy/README.md), backup at [`deploy/BACKUP.md`](deploy/BACKUP.md). The bug list discovered during that deploy (graceful-shutdown deadlock with active SSE subscribers, permission errors on protected config files) is fixed in `main`.
+
+What's *not* yet in: official MCP transport (stdio + streamable-HTTP) — the master currently exposes its tools via JSON-over-HTTP at `/mcp/call`; the SDK adapter is queued. Federation, multi-master replicas, and ingest tools (Web Clipper, etc.) are v1.x stretch.
+
+---
+
+## Quick start
+
+You'll need Postgres 15+ with the pgvector extension package installed. See [`deploy/README.md`](deploy/README.md) for the full production walkthrough.
+
+**On the master host:**
+
+```bash
+# 1. One-time superuser setup (Postgres + pgvector + role privileges)
+sudo -u postgres psql <<SQL
+  CREATE ROLE vaultmcp LOGIN PASSWORD 'change-me' CREATEROLE;
+  CREATE DATABASE vaultmcp OWNER vaultmcp;
+SQL
+sudo -u postgres psql -d vaultmcp -c "CREATE EXTENSION vector;"
+
+# 2. Install the package + create system user + dirs
+sudo useradd --system --no-create-home vaultmcp
+sudo install -d -o vaultmcp -g vaultmcp -m 0750 /srv/vaultmcp /srv/vaultmcp/wiki
+python3 -m venv /opt/vaultmcp/venv
+sudo /opt/vaultmcp/venv/bin/pip install vaultmcp   # or: /path/to/this/repo
+
+# 3. Configure + install systemd unit
+sudo cp deploy/master.env.example /srv/vaultmcp/master.env
+sudoedit /srv/vaultmcp/master.env  # fill in DSN, set VAULTMCP_HTTP_HOST=<lan-ip>
+sudo cp deploy/master.service /etc/systemd/system/vaultmcp-master.service
+sudo systemctl daemon-reload && sudo systemctl enable --now vaultmcp-master
+
+# 4. Issue a token for the first agent server
+sudo -u vaultmcp env $(sudo cat /srv/vaultmcp/master.env | grep -v '^#' | xargs) \
+  /opt/vaultmcp/venv/bin/vaultmcp-master add-server --id MyServer --apps myapp,shared
+```
+
+The token is printed once. Save it.
+
+**On each agent host:**
+
+```bash
+# 1. Install
+git clone https://github.com/alinclaudiu/vaultmcp ~/projects/vaultmcp
+python3 -m venv ~/.local/share/vaultmcp-venv
+~/.local/share/vaultmcp-venv/bin/pip install -e ~/projects/vaultmcp
+
+# 2. Configure
+mkdir -p ~/vault ~/.config/vaultmcp ~/.config/systemd/user
+cat > ~/.config/vaultmcp/agent.env <<EOF
+VAULTMCP_MASTER_URL=http://<master-lan-ip>:8080
+VAULTMCP_SERVER_ID=MyServer
+VAULTMCP_APP=myapp
+VAULTMCP_TOKEN=<token-from-add-server>
+VAULTMCP_VAULT_DIR=$HOME/vault
+EOF
+chmod 600 ~/.config/vaultmcp/agent.env
+
+# 3. systemd --user unit + start
+cp ~/projects/vaultmcp/deploy/agent.service ~/.config/systemd/user/
+sed -i "s|ExecStart=.*|ExecStart=$HOME/.local/share/vaultmcp-venv/bin/vaultmcp-agent run|" \
+    ~/.config/systemd/user/agent.service
+systemctl --user daemon-reload
+systemctl --user enable --now vaultmcp-agent
+```
+
+Drop a markdown file under `~/vault/apps/myapp/` and watch it land on the master at `/srv/vaultmcp/wiki/apps/myapp/` within a second or two. The dashboard at `http://<master-ip>:8080/` shows the activity live (gate it behind `VAULTMCP_DASHBOARD_PASSWORD` before exposing).
 
 ---
 
@@ -140,10 +215,14 @@ Phase 1 (working skeleton) is the next milestone. Estimated 4 focused engineer-w
 |---|---|
 | Curious, just want the gist | This README, then [`docs/01-vision.md`](docs/01-vision.md) |
 | Choosing between VaultMCP and VaultMesh | [`docs/02-vs-vaultmesh.md`](docs/02-vs-vaultmesh.md) |
-| Planning to build it | [`DESIGN.md`](DESIGN.md) end-to-end |
+| Deploying for the first time | [`deploy/README.md`](deploy/README.md) |
+| Setting up backups | [`deploy/BACKUP.md`](deploy/BACKUP.md) |
+| Sizing for prod | [`deploy/PERFORMANCE.md`](deploy/PERFORMANCE.md) |
 | Building an extension that uses the DB | [`docs/03-extensibility.md`](docs/03-extensibility.md) |
-| Implementing the dashboard | [`docs/04-dashboard.md`](docs/04-dashboard.md) |
+| Implementing or extending the dashboard | [`docs/04-dashboard.md`](docs/04-dashboard.md) |
+| Reading the architecture | [`DESIGN.md`](DESIGN.md) |
 | Wondering about the long term | [`ROADMAP.md`](ROADMAP.md) |
+| Operating day-to-day | the project's CLAUDE.md (kept up to date for AI agents working on the repo) |
 
 ---
 
