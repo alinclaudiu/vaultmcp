@@ -46,10 +46,18 @@ class ValidationError(MasterClientError):
 class MasterClient:
     """Async HTTP client; one per agent process."""
 
-    def __init__(self, base_url: str, *, timeout_seconds: float = 30.0):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        token: str | None = None,
+        timeout_seconds: float = 30.0,
+    ):
         self.base_url = base_url.rstrip("/")
+        headers = {"Authorization": f"Bearer {token}"} if token else None
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout_seconds, connect=10.0)
+            timeout=httpx.Timeout(timeout_seconds, connect=10.0),
+            headers=headers,
         )
 
     async def close(self) -> None:

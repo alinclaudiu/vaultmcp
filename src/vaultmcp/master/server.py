@@ -23,10 +23,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from .auth import AuthenticatedServer, hash_token, parse_bearer
 from .config import MasterConfig
 from .db import Database
 from .sse import EventBroadcaster, format_sse
@@ -86,6 +87,33 @@ def build_app(config: MasterConfig) -> FastAPI:
         lifespan=lifespan,
     )
 
+    # ---------- auth dependency ----------
+
+    async def authenticate(
+        authorization: str | None = Header(default=None),
+    ) -> AuthenticatedServer | None:
+        """Validate a bearer token against the ``servers`` table.
+
+        Returns ``None`` when no servers are registered yet (dev mode);
+        callers that need an identity fall back to other constraints.
+        Raises 401 when servers exist and the token is missing or wrong.
+        """
+        db = _get_db(state)
+        if await db.count_servers() == 0:
+            return None  # dev mode: no servers configured, no auth enforced
+        token = parse_bearer(authorization)
+        if token is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Bearer token required",
+                headers={"WWW-Authenticate": 'Bearer realm="vaultmcp"'},
+            )
+        match = await db.find_server_by_token_hash(hash_token(token))
+        if match is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        server_id, apps = match
+        return AuthenticatedServer(id=server_id, apps=tuple(apps))
+
     # ---------- /healthz ----------
 
     @app.get("/healthz")
@@ -95,12 +123,15 @@ def build_app(config: MasterConfig) -> FastAPI:
     # ---------- /mcp/call ----------
 
     @app.post("/mcp/call")
-    async def call_tool(req: CallRequest = Body(...)) -> dict[str, Any]:
+    async def call_tool(
+        req: CallRequest = Body(...),
+        authed: AuthenticatedServer | None = Depends(authenticate),
+    ) -> dict[str, Any]:
         db = _get_db(state)
         wiki_dir = _get_wiki_dir(state)
         try:
             return await call_handler_by_name(
-                req.tool, req.args, db=db, wiki_dir=wiki_dir
+                req.tool, req.args, db=db, wiki_dir=wiki_dir, authed=authed
             )
         except ConflictError as exc:
             raise HTTPException(
@@ -118,6 +149,7 @@ def build_app(config: MasterConfig) -> FastAPI:
     async def subscribe(
         since_global_version: int | None = None,
         prefix: str | None = None,
+        _authed: AuthenticatedServer | None = Depends(authenticate),
     ) -> StreamingResponse:
         broadcaster = _get_broadcaster(state)
 

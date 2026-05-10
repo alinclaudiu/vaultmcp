@@ -27,6 +27,10 @@ class AgentConfig:
     app: str
     agent_model: str = "unspecified"
 
+    # Bearer token for master auth. None when running against an
+    # un-configured master (no servers registered).
+    token: str | None = None
+
     # Polling fallback if SSE stream isn't reachable.
     poll_interval_seconds: int = 5
 
@@ -53,12 +57,22 @@ class AgentConfig:
             )
         ).expanduser().resolve()
 
+        # Token: prefer VAULTMCP_TOKEN env var. Fall back to
+        # ``<state_dir>/token`` (per DESIGN.md §3.5 and §7.1) so
+        # systemd units can keep the secret out of EnvironmentFile.
+        token = os.environ.get("VAULTMCP_TOKEN")
+        if not token:
+            token_file = state_dir / "token"
+            if token_file.is_file():
+                token = token_file.read_text(encoding="utf-8").strip() or None
+
         return cls(
             master_url=master_url.rstrip("/"),
             vault_dir=vault_dir,
             state_dir=state_dir,
             server_id=server_id,
             app=app,
+            token=token,
             agent_model=os.environ.get("VAULTMCP_AGENT_MODEL", "unspecified"),
             poll_interval_seconds=int(
                 os.environ.get("VAULTMCP_POLL_INTERVAL", "5")

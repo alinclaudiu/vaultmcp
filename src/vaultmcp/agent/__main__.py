@@ -47,7 +47,7 @@ def run() -> None:
         config = AgentConfig.from_env()
         cache = VersionCache(config.state_dir / "version-cache.db")
         queue = WriteQueue(config.state_dir / "queue")
-        client = MasterClient(config.master_url)
+        client = MasterClient(config.master_url, token=config.token)
 
         # Shared between sync (which writes locally on incoming events)
         # and watcher (which observes local writes). The suppressor
@@ -82,7 +82,7 @@ def status() -> None:
         config = AgentConfig.from_env()
         cache = VersionCache(config.state_dir / "version-cache.db")
         queue = WriteQueue(config.state_dir / "queue")
-        client = MasterClient(config.master_url)
+        client = MasterClient(config.master_url, token=config.token)
 
         click.echo(f"vault_dir:     {config.vault_dir}")
         click.echo(f"state_dir:     {config.state_dir}")
@@ -109,7 +109,7 @@ def verify(prefix: str | None) -> None:
 
     async def _main() -> None:
         config = AgentConfig.from_env()
-        client = MasterClient(config.master_url)
+        client = MasterClient(config.master_url, token=config.token)
 
         try:
             page_paths: set[str] = set()

@@ -469,3 +469,65 @@ class Database:
             error_code,
             client_ip,
         )
+
+    # ---------- servers (auth) ----------
+
+    async def add_server(
+        self, *, server_id: str, apps: list[str], token_hash: str
+    ) -> bool:
+        """Insert a new server row. Returns False if the id already exists."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO servers (id, apps, token_hash, rotated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (id) DO NOTHING
+                RETURNING id
+                """,
+                server_id,
+                apps,
+                token_hash,
+            )
+        return row is not None
+
+    async def update_server_token(self, *, server_id: str, token_hash: str) -> bool:
+        """Rotate the token of an existing server. Returns False if missing."""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE servers SET token_hash = $1, rotated_at = NOW() WHERE id = $2",
+                token_hash,
+                server_id,
+            )
+        return result.endswith(" 1")
+
+    async def remove_server(self, *, server_id: str) -> bool:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM servers WHERE id = $1", server_id)
+        return result.endswith(" 1")
+
+    async def find_server_by_token_hash(
+        self, token_hash: str
+    ) -> tuple[str, list[str]] | None:
+        """Look up a server by its hashed token. Returns ``(id, apps)`` or None."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, apps FROM servers WHERE token_hash = $1",
+                token_hash,
+            )
+        if row is None:
+            return None
+        return row["id"], list(row["apps"] or [])
+
+    async def count_servers(self) -> int:
+        """Total registered servers. Auth is bypassed when this is zero."""
+        async with self.pool.acquire() as conn:
+            n = await conn.fetchval("SELECT COUNT(*) FROM servers")
+        return int(n)
+
+    async def list_servers(self) -> list[tuple[str, list[str], datetime | None]]:
+        """List ``(id, apps, rotated_at)`` for every server. Tokens never returned."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, apps, rotated_at FROM servers ORDER BY id"
+            )
+        return [(r["id"], list(r["apps"] or []), r["rotated_at"]) for r in rows]

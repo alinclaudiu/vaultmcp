@@ -27,6 +27,7 @@ from ..shared.types import (
     WriteInput,
     WriteOutput,
 )
+from .auth import AuthenticatedServer
 from .db import ConflictResult, Database, WriteResult
 from .render import render_to_disk
 
@@ -68,6 +69,36 @@ class ValidationFailed(ToolError):
     status = 422
 
 
+class ForbiddenError(ToolError):
+    """Raised when the authenticated server tries to act as a different one
+    or to write on behalf of an app it doesn't own.
+    """
+
+    status = 403
+
+
+def _enforce_session_matches_server(
+    session_server_id: str,
+    session_app: str,
+    authed: AuthenticatedServer | None,
+) -> None:
+    """Reject calls where the session claims an identity the token doesn't grant.
+
+    When ``authed`` is None the master runs in unauthenticated dev mode
+    (no servers registered yet) and the check is skipped.
+    """
+    if authed is None:
+        return
+    if session_server_id != authed.id:
+        raise ForbiddenError(
+            f"Session claims server_id={session_server_id!r} but token belongs to {authed.id!r}"
+        )
+    if session_app not in authed.apps:
+        raise ForbiddenError(
+            f"Server {authed.id!r} is not registered for app {session_app!r}"
+        )
+
+
 # =============================================================
 # Handlers
 # =============================================================
@@ -98,7 +129,11 @@ async def handle_write(
     db: Database,
     wiki_dir: Path,
     inp: WriteInput,
+    *,
+    authed: AuthenticatedServer | None = None,
 ) -> WriteOutput:
+    _enforce_session_matches_server(inp.session.server_id, inp.session.app, authed)
+
     # Parse frontmatter — minimal validation only at this phase.
     try:
         metadata, _body = fm_mod.parse(inp.content)
@@ -179,7 +214,14 @@ async def handle_list(db: Database, inp: ListInput) -> ListOutput:
     )
 
 
-async def handle_append_log(db: Database, inp: LogEntryInput) -> LogEntryOutput:
+async def handle_append_log(
+    db: Database,
+    inp: LogEntryInput,
+    *,
+    authed: AuthenticatedServer | None = None,
+) -> LogEntryOutput:
+    _enforce_session_matches_server(inp.server_id, inp.app, authed)
+
     log_id, gv = await db.append_log(
         timestamp=inp.timestamp,
         server_id=inp.server_id,
@@ -202,18 +244,28 @@ async def call_handler_by_name(
     *,
     db: Database,
     wiki_dir: Path,
+    authed: AuthenticatedServer | None = None,
 ) -> dict[str, Any]:
     """Dispatch a tool call by name. Returns a JSON-serializable dict.
 
     Raises :class:`ToolError` on protocol-level errors.
+
+    ``authed`` carries the result of the FastAPI auth dependency: an
+    :class:`AuthenticatedServer` when bearer-token auth is enforced, or
+    ``None`` when the master runs in unauthenticated dev mode (no
+    registered servers).
     """
     if name == "wiki.read":
         return (await handle_read(db, ReadInput(**args))).model_dump(mode="json")
     if name == "wiki.write":
-        return (await handle_write(db, wiki_dir, WriteInput(**args))).model_dump(mode="json")
+        return (
+            await handle_write(db, wiki_dir, WriteInput(**args), authed=authed)
+        ).model_dump(mode="json")
     if name == "wiki.list":
         return (await handle_list(db, ListInput(**args))).model_dump(mode="json")
     if name == "wiki.append_log":
-        return (await handle_append_log(db, LogEntryInput(**args))).model_dump(mode="json")
+        return (
+            await handle_append_log(db, LogEntryInput(**args), authed=authed)
+        ).model_dump(mode="json")
 
     raise ToolError(f"Unknown tool: {name}", status=400)
