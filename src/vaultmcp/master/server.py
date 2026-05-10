@@ -4,15 +4,17 @@ Combines the MCP tool surface (synchronous read/write/list/append_log) with
 a FastAPI sidecar that hosts:
 
 - ``/healthz`` — liveness probe
+- ``/metrics`` — Prometheus text-format gauges
 - ``/mcp/subscribe`` — SSE endpoint for real-time event stream
-- ``/mcp/call`` — JSON-over-HTTP dispatch for the MCP tools (used by tests
-  and by clients that don't speak the full MCP protocol yet)
+- ``/mcp/call`` — JSON-over-HTTP dispatch for the MCP tools (the v0.2-era
+  shim; now lives alongside ``/mcp/streamable``)
+- ``/mcp/streamable`` — official MCP-over-HTTP transport via the
+  ``mcp`` Python SDK; what off-the-shelf MCP-aware clients should dial
+- ``/`` and friends — the dashboard router
 
-For v0.2 we expose the tools via a simple HTTP/JSON endpoint at ``/mcp/call``.
-This keeps the implementation testable and independent of the still-evolving
-MCP Python SDK transport details. Adding the official MCP server protocol
-(stdio + streamable-HTTP) is a small adapter on top of these handlers and
-is tracked in a follow-up issue.
+Stdio MCP transport (the SDK's other supported wire format) lives in
+``vaultmcp.master.mcp_adapter``; bring it up via the
+``vaultmcp-master mcp-stdio`` CLI.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from typing import Any
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import Response, StreamingResponse
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .auth import AuthenticatedServer, hash_token, parse_bearer
@@ -32,6 +35,7 @@ from .config import MasterConfig
 from .dashboard import build_router as build_dashboard_router
 from .db import Database
 from .embeddings import EmbeddingWorker, build_provider
+from .mcp_adapter import build_mcp_server
 from .metrics import render_metrics
 from .ownership import OwnershipRules, load_rules
 from .sse import EventBroadcaster, format_sse
@@ -106,8 +110,26 @@ def build_app(config: MasterConfig) -> FastAPI:
         state["ownership"] = ownership
         state["embedder"] = embedding_provider
 
+        # Network MCP transport (streamable-HTTP). Mounted at
+        # /mcp/streamable; the JSON-over-HTTP /mcp/call shim stays in
+        # place for callers from before the SDK adapter landed.
+        # Stateless=True keeps each POST self-contained — no session
+        # affinity to manage. The session manager owns its own task
+        # group via the run() context, so we keep it open for the
+        # duration of the FastAPI lifespan.
+        mcp_server = build_mcp_server(db=db, wiki_dir=config.wiki_dir)
+        mcp_session_manager = StreamableHTTPSessionManager(
+            app=mcp_server, stateless=True, json_response=True
+        )
+        state["mcp_session_manager"] = mcp_session_manager
+
         try:
-            yield
+            # ``mcp_session_manager.run()`` owns its own task group and
+            # MUST stay open for the duration of /mcp/streamable. Nest
+            # it inside our existing teardown so both shut down cleanly
+            # on lifespan exit.
+            async with mcp_session_manager.run():
+                yield
         finally:
             if embedding_worker is not None:
                 await embedding_worker.stop()
@@ -185,6 +207,28 @@ def build_app(config: MasterConfig) -> FastAPI:
         master's localhost bind."""
         body = await render_metrics(_get_db(state))
         return Response(content=body, media_type="text/plain; version=0.0.4")
+
+    # ---------- /mcp/streamable (network MCP transport) ----------
+    #
+    # The official MCP-over-HTTP endpoint. Lives alongside (not in
+    # place of) /mcp/call so old JSON-over-HTTP callers keep working
+    # while new MCP-aware clients dial /mcp/streamable. Mounted as a
+    # raw ASGI route because the SDK's session manager already speaks
+    # ASGI (POST + SSE on the same path, per MCP spec).
+    async def _mcp_streamable_asgi(scope: dict, receive: Any, send: Any) -> None:
+        sm = state.get("mcp_session_manager")
+        if not isinstance(sm, StreamableHTTPSessionManager):
+            # Lifespan hasn't completed yet — shouldn't happen because
+            # uvicorn waits for startup, but bail safely if it does.
+            await Response(
+                "MCP transport not initialised", status_code=503
+            )(scope, receive, send)
+            return
+        await sm.handle_request(scope, receive, send)
+
+    from starlette.routing import Mount as _Mount
+
+    app.routes.append(_Mount("/mcp/streamable", app=_mcp_streamable_asgi))
 
     # ---------- /mcp/call ----------
 
