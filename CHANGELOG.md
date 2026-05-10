@@ -2,6 +2,50 @@
 
 All notable changes to VaultMCP are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] — 2026-05-10
+
+**Extensions phase.** Master now hosts other applications on the same
+DB per `docs/03-extensibility.md` and ROADMAP v0.5.
+
+### Added — `ext.*` MCP tools
+
+- **`ext.register`** — create an extension entry. Validates name +
+  schema_prefix (default `ext_<name>_`); persists owners + policy.
+- **`ext.list`** — enumerate registered extensions (no policy details).
+- **`ext.declare_table`** — translate a column-spec list into a
+  `CREATE TABLE IF NOT EXISTS ext_<name>_<table>`. Type whitelist
+  (text/int/bigint/uuid/timestamptz/jsonb/numeric/...), per-column
+  primary_key / not_null / default / references.
+- **`ext.query`** — run a SELECT against the extension's tables (and
+  any core tables the policy grants). Two layers of defense:
+  - lexical reject of write keywords (`INSERT`, `UPDATE`, `DELETE`,
+    `DROP`, `ALTER`, `TRUNCATE`, `GRANT`, `CREATE`, `DO`, …) up
+    front, with a clear error;
+  - Postgres `READ ONLY` transaction at the DB layer so even a
+    bypass cannot mutate state.
+
+### Schema
+
+- `extensions(name PK, schema_prefix UNIQUE, owners[], policy JSONB,
+  schema_version, created_at)`.
+
+### Tests
+
+- 21 unit tests covering DDL helpers, name validation, write-keyword
+  rejection (parametrised over the mutation catalogue).
+- 2 e2e tests walking the full worked-example flow from
+  `docs/03-extensibility.md`: register a CRM extension, declare a
+  contacts table, INSERT, run `ext.query` with a JOIN against
+  `pages`, verify the mutation guard refuses `DELETE`.
+
+### Deferred to v0.6 hardening
+
+Schema-prefix isolation via real Postgres roles + `SET ROLE` per query
+is deliberately not in this release. The application-layer prefix
+enforcement plus the `READ ONLY` transaction is enough for trusted
+authenticated extensions; full role isolation requires `CREATEROLE`
+on the master DB role and a documented operator setup step.
+
 ## [0.4.1] — 2026-05-10
 
 Polish on top of `v0.4.0`. The biggest user-facing change is that the
